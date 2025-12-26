@@ -135,7 +135,8 @@ static const char *fragment_shader_src =
     "    out_color.a *= alpha;\n"
 
     "    if (use_texture) {\n"
-    "        out_color.a *= texture2D(tex, v_uv).a;\n"
+    "       vec4 tex_color = texture2D(tex, v_uv);\n"
+    "       out_color = vec4(tex_color.rgb, out_color.a * tex_color.a);\n"
     "    }\n"
 
     "    gl_FragColor = out_color;\n"
@@ -1040,6 +1041,12 @@ int comp_create_socket() {
 }
 
 unsigned long comp_register_window(window_t *window) {
+    if (!window) {
+        printf("  EE: comp_register_window() -> invalid window\n");
+
+        return 0;
+    }
+
     if (registry_count >= MAX_WINDOWS) {
         printf("  EE: comp_register_window() -> window registry full\n");
 
@@ -1056,6 +1063,12 @@ unsigned long comp_register_window(window_t *window) {
 }
 
 void comp_remove_window(window_t *window) {
+    if (!window) {
+        printf("  EE: comp_remove_window() -> invalid window\n");
+
+        return;
+    }
+
     if (registry_count == 0) {
         printf("  EE: comp_remove_window() -> window registry empty\n");
 
@@ -1063,6 +1076,8 @@ void comp_remove_window(window_t *window) {
     }
 
     unsigned long id = ui_window_get_id(window);
+
+    ui_destroy_window(window);
 
     for (int i = 0; i < registry_count; i++) {
         if (window_registry[i].id == id) {
@@ -1074,6 +1089,64 @@ void comp_remove_window(window_t *window) {
     }
 
     printf("  WW: comp_remove_window() -> window %lu not found\n", id);
+}
+
+void comp_handle_widget_command(window_t *window, const char *command) {
+    char widget_id[64];
+    float x, y, w, h;
+    int radius, border_width;
+    char color[32];
+    char text[256];
+    char font_file[64];
+    float font_size;
+
+    if (sscanf(command, "CREATE_WIDGET:%63[^:]", widget_id) == 1) {
+        widget_t *widget = ui_create_widget(widget_id, WIDGET_RECT);
+
+        ui_append_widget(window, widget);
+    } else if (sscanf(command, "SET_WIDGET_GEOMETRY:%63[^:]:%f:%f:%f:%f:%d:%d", widget_id, &x, &y, &w, &h, &radius, &border_width) == 7) {
+        widget_t *widget = ui_window_get_widget(window, widget_id);
+
+        if (!widget) {
+            printf("  WW: comp_handle_widget_command() -> SET_WIDGET_GEOMETRY on invalid widget\n");
+
+            return;
+        }
+
+        ui_widget_set_geometry(widget, x, y, w, h, radius, border_width);
+    } else if (sscanf(command, "SET_WIDGET_COLOR:%31s", color) == 1) {
+        widget_t *widget = ui_window_get_widget(window, widget_id);
+
+        if (!widget) {
+            printf("  WW: comp_handle_widget_command() -> SET_WIDGET_COLOR on invalid widget\n");
+
+            return;
+        }
+
+        ui_widget_set_color(widget, color);
+    } else if (sscanf(command, "SET_WIDGET_TEXT:%255s", text) == 1) {
+        widget_t *widget = ui_window_get_widget(window, widget_id);
+
+        if (!widget) {
+            printf("  WW: comp_handle_widget_command() -> SET_WIDGET_TEXT on invalid widget\n");
+
+            return;
+        }
+
+        ui_widget_set_text(widget, text);
+    } else if (sscanf(command, "LOAD_WIDGET_FONT:%63s:%f", font_file, &font_size) == 2) {
+        widget_t *widget = ui_window_get_widget(window, widget_id);
+
+        if (!widget) {
+            printf("  WW: comp_handle_widget_command() -> LOAD_WIDGET_FONT on invalid widget\n");
+
+            return;
+        }
+
+        font_t *font = ui_load_font(font_file, font_size);
+
+        ui_widget_set_font(widget, font);
+    }
 }
 
 window_t *comp_get_window(unsigned long id) {
@@ -1103,7 +1176,7 @@ void comp_listen_socket() {
     if (bytes == sizeof(request)) {
         printf("  II: comp_listen_socket() -> request received: %s\n", request.request);
 
-        if (strcmp(request.request, "CREATE") == 0) {
+        if (strcmp(request.request, "CREATE_WINDOW") == 0) {
             window_t *new_win = ui_create_window();
 
             unsigned long id = comp_register_window(new_win);
@@ -1125,6 +1198,22 @@ void comp_listen_socket() {
                     comp_remove_window(window);
 
                     focused_window = window_registry[registry_count].window;
+                } else if (strncmp(request.request, "CREATE_WIDGET:", 14) == 0)
+                    comp_handle_widget_command(window, request.request);
+                else if (strncmp(request.request, "SET_WIDGET_GEOMETRY:", 20) == 0)
+                    comp_handle_widget_command(window, request.request);
+                else if (strncmp(request.request, "SET_WIDGET_COLOR:", 17) == 0)
+                    comp_handle_widget_command(window, request.request);
+                else if (strncmp(request.request, "SET_WIDGET_TEXT:", 16) == 0)
+                    comp_handle_widget_command(window, request.request);
+                else if (strncmp(request.request, "LOAD_WIDGET_FONT:", 17) == 0)
+                    comp_handle_widget_command(window, request.request);
+                else {
+                    printf("  EE: cmp_listen_socket() -> invalid command from window ID %lu\n", request.win_id);
+
+                    send(client_fd, "FAILED", 6, 0);
+
+                    return;
                 }
 
                 send(client_fd, "OK", 2, 0);

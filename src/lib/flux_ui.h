@@ -45,6 +45,7 @@ typedef void (*widget_down_fn)(widget_t *self);
 typedef void (*widget_up_fn)(widget_t *self);
 
 typedef void (*window_render_loop_fn)(window_t *self, float dt);
+typedef void (*window_exit_fn)(window_t *self);
 
 inline void ui_hex_to_rgba(const char *hex, float *r, float *g, float *b, float *a) {
     unsigned int alpha, red, green, blue;
@@ -76,18 +77,21 @@ void ui_destroy_window(window_t *window);
 bool ui_window_get_rendered(window_t *window);
 unsigned long ui_window_get_id(window_t *window);
 GLuint ui_window_get_texture(window_t *window);
+widget_t *ui_window_get_widget(window_t *window, const char *widget_id);
 void ui_call_render_loop(window_t *window, float dt);
 
 widget_t *ui_create_widget(const char *id, widget_type_t type);
 void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, float radius, float border_width);
 void ui_widget_set_color(widget_t *widg, const char *color);
-void ui_widget_set_text(widget_t *widg, const char *text, font_t *font);
+void ui_widget_set_text(widget_t *widg, const char *text);
 void ui_widget_set_image(widget_t *widg, GLuint texture);
+void ui_widget_set_font(widget_t *widg, font_t *font);
+font_t *ui_widget_get_font(widget_t *widg);
 void ui_append_widget(window_t *window, widget_t *widget);
 void ui_remove_widget(window_t *window, widget_t *widget);
+
 void ui_request_render(window_t *window);
 void ui_request_hide(window_t *window);
 void ui_set_render_loop(window_t *window, window_render_loop_fn func);
-
 
 #endif

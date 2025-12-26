@@ -1,13 +1,14 @@
 #include "sys_ui.h"
 #include "compositor.h"
-#include "lib/flux_ui.h"
 
 static font_t *ui_font_body;
 static font_t *ui_font_heading;
+static GLuint ui_game_image;
 
 static window_t *sys_window;
 static widget_t *sys_background;
 static widget_t *sys_clock;
+static widget_t *sys_recent_game;
 
 static window_t *menu_window;
 static widget_t *menu_background;
@@ -45,13 +46,13 @@ static void set_time(widget_t *clock) {
     if (hour12 == 0)
         hour12 = 12;
 
-    const char *apm = (hour24 >= 12) ? "PM" : "AM";
+    const char *apm = (hour24 >= 12) ? "pm" : "am";
     char time[9];
 
     sprintf(time, "%02d:%02d %s", hour12, minutes, apm);
 
     if (strcmp(time, past_time) != 0) {
-        ui_widget_set_text(clock, time, ui_font_heading);
+        ui_widget_set_text(clock, time);
 
         float width, height;
 
@@ -96,8 +97,9 @@ window_t *sys_ui_menu() {
 
     ui_widget_set_geometry(menu_clock, 20, 40, 50, 50, -1, -1);
     ui_widget_set_color(menu_clock, "#ffffffff");
-    ui_widget_set_text(menu_clock, "CLOCK", ui_font_heading);
-    ui_append_widget(menu_window, sys_clock);
+    ui_widget_set_font(menu_clock, ui_font_heading);
+    ui_widget_set_text(menu_clock, "CLOCK");
+    ui_append_widget(menu_window, menu_clock);
 
     ui_set_render_loop(menu_window, menu_ui_render);
 
@@ -126,8 +128,25 @@ window_t *sys_ui_init() {
 
     ui_widget_set_geometry(sys_clock, 20, 40, 50, 50, -1, -1);
     ui_widget_set_color(sys_clock, "#ffffffff");
-    ui_widget_set_text(sys_clock, "CLOCK", ui_font_heading);
+    ui_widget_set_font(sys_clock, ui_font_heading);
+    ui_widget_set_text(sys_clock, "CLOCK");
     ui_append_widget(sys_window, sys_clock);
+
+    sys_recent_game = ui_create_widget("sys-recent-game", WIDGET_IMAGE);
+
+    ui_widget_set_geometry(sys_recent_game, 100, 500, 200, 200, 10, -1);
+    ui_widget_set_color(sys_recent_game, "#ffffffff");
+    
+    ui_game_image = ui_load_texture("test.jpg");
+
+    if (ui_game_image == 0) {
+        printf("  EE: sys_ui_init() -> failed to load ui_game_image\n");
+
+        exit(1);
+    }
+
+    ui_widget_set_image(sys_recent_game, ui_game_image);
+    ui_append_widget(sys_window, sys_recent_game);
 
     ui_set_render_loop(sys_window, sys_ui_render);
 

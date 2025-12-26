@@ -6,11 +6,11 @@
 struct Widget {
     float x, y, w, h;
     int radius, border_width;
-    char *color;
-    char *text;
+    char color[32];
+    char text[256];
     font_t *font;
     GLuint texture;
-    char *id;
+    char id[64];
     widget_type_t type;
 
     widget_enter_fn mouse_enter;
@@ -32,6 +32,7 @@ typedef struct Window {
     int width, height;
 
     window_render_loop_fn render_loop;
+    window_exit_fn on_exit;
 } window_t;
 
 static unsigned int counter = 0;
@@ -359,7 +360,7 @@ void ui_render_window(window_t *window) {
         widget_t *w = window->widgets[i];
         float r, g, b, a;
 
-        if (w->color)
+        if (strlen(w->color) != 0)
             ui_hex_to_rgba(w->color, &r, &g, &b, &a);
 
         switch (w->type) {
@@ -394,6 +395,9 @@ void ui_render_window(window_t *window) {
 }
 
 void ui_destroy_window(window_t *window) {
+    for (int i = 0; i < window->widget_count; i++)
+        free(window->widgets[i]);
+
     memset(window->widgets, 0, sizeof(window->widgets));
 
     window->widget_count = 0;
@@ -414,10 +418,21 @@ GLuint ui_window_get_texture(window_t *window) {
     return window->color_tex;
 }
 
-widget_t *ui_create_widget(const char *id, widget_type_t type) {
+widget_t *ui_window_get_widget(window_t *window, const char *widget_id) {
+    for (int i = 0; i < window->widget_count; i++) {
+        widget_t *curr_widg = window->widgets[i];
+
+        if (strcmp(curr_widg->id, widget_id) == 0)
+            return curr_widg;
+    }
+
+    return NULL;
+}
+
+widget_t *ui_create_widget(const char id[64], widget_type_t type) {
     widget_t *widg = calloc(1, sizeof(widget_t));
     
-    widg->id = strdup(id);
+    strcpy(widg->id, id);
     widg->type = type;
 
     return widg;
@@ -451,18 +466,17 @@ void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, 
 }
 
 void ui_widget_set_color(widget_t *widg, const char *color) {
-    widg->color = strdup(color);
+    strcpy(widg->color, color);
 }
 
-void ui_widget_set_text(widget_t *widg, const char *text, font_t *font) {
+void ui_widget_set_text(widget_t *widg, const char *text) {
     if (widg->type != WIDGET_NONE && widg->type != WIDGET_TEXT) {
         printf("  WW: ui_widget_set_text() -> widget has a different content type, ignoring set_text\n    %s\n", widg->id);
 
         return;
     }
 
-    widg->text = strdup(text);
-    widg->font = font;
+    strcpy(widg->text, text);
 }
 
 void ui_widget_set_image(widget_t *widg, GLuint texture) {
@@ -473,6 +487,14 @@ void ui_widget_set_image(widget_t *widg, GLuint texture) {
     }
 
     widg->texture = texture;
+}
+
+void ui_widget_set_font(widget_t *widg, font_t *font) {
+    widg->font = font;
+}
+
+font_t *ui_widget_get_font(widget_t *widg) {
+    return widg->font;
 }
 
 void ui_append_widget(window_t *window, widget_t *widget) {

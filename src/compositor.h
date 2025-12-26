@@ -81,6 +81,4 @@ extern GLint text_uni_color;
 extern GLint text_uni_tex;
 extern GLuint vbo;
 
-
-
 #endif
