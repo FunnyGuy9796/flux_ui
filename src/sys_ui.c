@@ -113,8 +113,8 @@ void sys_ui_render(window_t *window, float dt) {
 }
 
 window_t *sys_ui_init() {
-    ui_font_body = ui_load_font("roboto.ttf", 24);
-    ui_font_heading = ui_load_font("roboto.ttf", 48);
+    ui_font_body = ui_load_font("assets/roboto.ttf", 24);
+    ui_font_heading = ui_load_font("assets/roboto.ttf", 48);
 
     sys_window = ui_create_window();
 
@@ -137,7 +137,7 @@ window_t *sys_ui_init() {
     ui_widget_set_geometry(sys_recent_game, 100, 500, 200, 200, 10, -1);
     ui_widget_set_color(sys_recent_game, "#ffffffff");
     
-    ui_game_image = ui_load_texture("test.jpg");
+    ui_game_image = ui_load_texture("assets/test.jpg");
 
     if (ui_game_image == 0) {
         printf("  EE: sys_ui_init() -> failed to load ui_game_image\n");
