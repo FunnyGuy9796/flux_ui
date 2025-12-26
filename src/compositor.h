@@ -81,4 +81,11 @@ extern GLint text_uni_color;
 extern GLint text_uni_tex;
 extern GLuint vbo;
 
+void comp_on_mouse_move(int x, int y);
+void comp_on_mouse_down(int x, int y, uint32_t button);
+void comp_on_mouse_up(int x, int y, uint32_t button);
+void comp_on_scroll(int dx, int dy);
+void comp_on_key_down(uint32_t key, uint32_t mods);
+void comp_on_key_up(uint32_t key, uint32_t mods);
+
 #endif

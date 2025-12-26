@@ -1,6 +1,7 @@
 #include "compositor.h"
 #include "lib/flux_ui.h"
 #include "sys_ui.h"
+#include "input.h"
 
 typedef struct Window window_t;
 
@@ -69,6 +70,9 @@ static int registry_count = 0;
 
 static window_t *requested_window;
 static window_t *focused_window;
+static window_t *mouse_win;
+
+static widget_t *mouse_cursor;
 
 static const float comp_quad[] = {
     -1.0f, -1.0f,
@@ -1230,6 +1234,30 @@ void comp_listen_socket() {
     close(client_fd);
 }
 
+void comp_on_mouse_move(int x, int y) {
+    ui_widget_set_geometry(mouse_cursor, x, y, -1, -1, -1, -1);
+}
+
+void comp_on_mouse_down(int x, int y, uint32_t button) {
+
+}
+
+void comp_on_mouse_up(int x, int y, uint32_t button) {
+
+}
+
+void comp_on_scroll(int dx, int dy) {
+
+}
+
+void comp_on_key_down(uint32_t key, uint32_t mods) {
+    printf("  II: comp_on_key_down() -> key pressed: %d\n", key);
+}
+
+void comp_on_key_up(uint32_t key, uint32_t mods) {
+
+}
+
 int main() {
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -1245,6 +1273,14 @@ int main() {
         running = false;
     }
 
+    int input_status = input_init();
+
+    if (input_status != 0) {
+        printf("  EE: main() -> an error occurred in input_init()\n");
+
+        running = false;
+    }
+
     int socket_status = comp_create_socket();
 
     if (socket_status != 0) {
@@ -1256,11 +1292,41 @@ int main() {
     window_t *sys_ui_win = sys_ui_init();
     window_t *sys_ui_men = sys_ui_menu();
 
+    mouse_win = ui_create_window();
+    mouse_cursor = ui_create_widget("sys-cursor", WIDGET_IMAGE);
+
+    GLuint cursor_image = ui_load_texture("assets/mouse.png");
+
+    ui_widget_set_geometry(mouse_cursor, mode->hdisplay / 2.0, mode->vdisplay / 2.0, 16, 16, -1, -1);
+    ui_widget_set_color(mouse_cursor, "#ffffffff");
+    ui_widget_set_image(mouse_cursor, cursor_image);
+    ui_append_widget(mouse_win, mouse_cursor);
+    ui_request_render(mouse_win);
+
     struct timespec last_time;
 
     clock_gettime(CLOCK_MONOTONIC, &last_time);
 
+    struct pollfd fds = {
+        .fd = input_get_fd(),
+        .events = POLLIN,
+    };
+
     while (running) {
+        int poll_ret = poll(&fds, 1, 16);
+
+        if (poll_ret < 0) {
+            if (errno == EINTR)
+                continue;
+
+            printf("  EE: main() -> poll failed\n");
+
+            break;
+        }
+
+        if (fds.revents & POLLIN)
+            input_process_event();
+
         fflush(stdout);
 
         wait_for_vblank();
@@ -1290,6 +1356,8 @@ int main() {
         if (menu_open)
             comp_redraw(sys_ui_men, dt);
 
+        comp_redraw(mouse_win, dt);
+
         int ret = render_frame();
     
         if (ret != 0) {
@@ -1298,8 +1366,9 @@ int main() {
             running = false;
         }
     }
-
+    
     cleanup();
+    input_cleanup();
 
     return 0;
 }

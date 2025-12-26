@@ -3,38 +3,6 @@
 #include "stb_truetype.h"
 #include "../compositor.h"
 
-struct Widget {
-    float x, y, w, h;
-    int radius, border_width;
-    char color[32];
-    char text[256];
-    font_t *font;
-    GLuint texture;
-    char id[64];
-    widget_type_t type;
-
-    widget_enter_fn mouse_enter;
-    widget_leave_fn mouse_leave;
-    widget_down_fn mouse_btn_down;
-    widget_up_fn mouse_btn_up;
-};
-
-typedef struct Window {
-    widget_t *widgets[MAX_WIDGETS];
-    int widget_count;
-    bool has_focus;
-    bool rendered;
-    unsigned long id;
-
-    GLuint fbo;
-    GLuint color_tex;
-    GLuint depth_rbo;
-    int width, height;
-
-    window_render_loop_fn render_loop;
-    window_exit_fn on_exit;
-} window_t;
-
 static unsigned int counter = 0;
 
 GLuint ui_load_texture(const char *filename) {
@@ -353,7 +321,7 @@ void ui_render_window(window_t *window) {
     glBindFramebuffer(GL_FRAMEBUFFER, window->fbo);
     glViewport(0, 0, window->width, window->height);
 
-    glClearColor(0, 0, 0, 1);
+    glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);
 
     for (int i = 0; i < window->widget_count; i++) {
@@ -456,7 +424,7 @@ void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, 
 
     if (border_width > -1) {
         if (widg->type != WIDGET_OUTLINE) {
-            printf("  WW: ui_widget_set_geometry() -> border_width set on a widget not of type WIDGET_OUTLINE\n");
+            printf("  WW: ui_widget_set_geometry() -> widget has a type other than WIDGET_OUTLINE, ignoring border_width\n    widget ID: %s\n", widg->id);
 
             return;
         }
@@ -471,7 +439,7 @@ void ui_widget_set_color(widget_t *widg, const char *color) {
 
 void ui_widget_set_text(widget_t *widg, const char *text) {
     if (widg->type != WIDGET_NONE && widg->type != WIDGET_TEXT) {
-        printf("  WW: ui_widget_set_text() -> widget has a different content type, ignoring set_text\n    %s\n", widg->id);
+        printf("  WW: ui_widget_set_text() -> widget has a different content type, ignoring set_text\n    widget ID: %s\n", widg->id);
 
         return;
     }
@@ -481,7 +449,7 @@ void ui_widget_set_text(widget_t *widg, const char *text) {
 
 void ui_widget_set_image(widget_t *widg, GLuint texture) {
     if (widg->type != WIDGET_NONE && widg->type != WIDGET_IMAGE) {
-        printf("  WW: ui_widget_set_image() -> widget has a different content type, ignoring set_image\n    %s\n", widg->id);
+        printf("  WW: ui_widget_set_image() -> widget has a different content type, ignoring set_image\n    widget ID: %s\n", widg->id);
 
         return;
     }
@@ -517,6 +485,9 @@ void ui_append_widget(window_t *window, widget_t *widget) {
 
         exit(1);
     }
+
+    if (widget->color[0] == '\0')
+        ui_widget_set_color(widget, "#ffffffff");
 
     for (int i = 0; i < count; i++) {
         widget_t *curr_widg = window->widgets[i];

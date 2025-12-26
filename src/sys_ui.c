@@ -15,7 +15,6 @@ static widget_t *menu_background;
 static widget_t *menu_body;
 static widget_t *menu_clock;
 
-static float curr_tick = 0;
 static float past_x = 0;
 static float curr_x = 0;
 static float past_y = 0;

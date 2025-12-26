@@ -14,7 +14,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 API_OBJS := $(patsubst $(API_DIR)/%.c,$(API_DIR)/%.o,$(API_SRCS))
 
 CFLAGS = -Wall -O2 -I/usr/local/include -I/usr/local/include/libdrm $(shell $(PKGCONF) --cflags $(PKGS))
-LDFLAGS = -L/usr/local/lib $(shell $(PKGCONF) --libs $(PKGS)) -ldrm -lm
+LDFLAGS = -L/usr/local/lib $(shell $(PKGCONF) --libs $(PKGS)) -ldrm -lm -linput -ludev
 
 all: $(TARGET)
 api: flux_api.o

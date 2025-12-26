@@ -47,6 +47,38 @@ typedef void (*widget_up_fn)(widget_t *self);
 typedef void (*window_render_loop_fn)(window_t *self, float dt);
 typedef void (*window_exit_fn)(window_t *self);
 
+struct Widget {
+    float x, y, w, h;
+    int radius, border_width;
+    char color[32];
+    char text[256];
+    font_t *font;
+    GLuint texture;
+    char id[64];
+    widget_type_t type;
+
+    widget_enter_fn mouse_enter;
+    widget_leave_fn mouse_leave;
+    widget_down_fn mouse_btn_down;
+    widget_up_fn mouse_btn_up;
+};
+
+typedef struct Window {
+    widget_t *widgets[MAX_WIDGETS];
+    int widget_count;
+    bool has_focus;
+    bool rendered;
+    unsigned long id;
+
+    GLuint fbo;
+    GLuint color_tex;
+    GLuint depth_rbo;
+    int width, height;
+
+    window_render_loop_fn render_loop;
+    window_exit_fn on_exit;
+} window_t;
+
 inline void ui_hex_to_rgba(const char *hex, float *r, float *g, float *b, float *a) {
     unsigned int alpha, red, green, blue;
 
@@ -93,5 +125,12 @@ void ui_remove_widget(window_t *window, widget_t *widget);
 void ui_request_render(window_t *window);
 void ui_request_hide(window_t *window);
 void ui_set_render_loop(window_t *window, window_render_loop_fn func);
+
+void ui_window_on_mouse_move(window_t *window, int x, int y);
+void ui_window_on_mouse_down(window_t *window, int x, int y, uint32_t button);
+void ui_window_on_mouse_up(window_t *window, int x, int y, uint32_t button);
+void ui_window_on_scroll(window_t *window, int dx, int dy);
+void ui_window_on_key_down(window_t *window, uint32_t key, uint32_t mods);
+void ui_window_on_key_up(window_t *window, uint32_t key, uint32_t mods);
 
 #endif
