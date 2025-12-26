@@ -32,4 +32,4 @@ gmake api (Optional build API)
 gmake run
 ```
 
-Note: `gmake run' must be run without any display server running or else they will compete for the framebuffer, possibly requiring the user to restart their machine.
+Note: `gmake run` must be run without any display server running or else they will compete for the framebuffer, possibly requiring the user to restart their machine.
