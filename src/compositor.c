@@ -25,8 +25,6 @@ GLint uni_rect_pos;
 GLint uni_rect_size;
 GLint uni_screen_size;
 GLint uni_radius;
-GLint uni_outline;
-GLint uni_border_width;
 GLint uni_use_texture;
 GLint uni_tex;
 
@@ -70,15 +68,17 @@ static int registry_count = 0;
 
 static window_t *requested_window;
 static window_t *focused_window;
+static window_t *sys_ui_win;
+static window_t *sys_ui_menu_win;
 static window_t *mouse_win;
 
 static widget_t *mouse_cursor;
 
 static const float comp_quad[] = {
     -1.0f, -1.0f,
-     1.0f, -1.0f,
+    1.0f, -1.0f,
     -1.0f,  1.0f,
-     1.0f,  1.0f,
+    1.0f,  1.0f,
 };
 
 static const char *vertex_shader_src =
@@ -102,8 +102,6 @@ static const char *fragment_shader_src =
     "precision mediump float;\n"
 
     "uniform bool use_texture;\n"
-    "uniform bool outline;\n"
-    "uniform float border_width;\n"
 
     "uniform sampler2D tex;\n"
     "uniform vec4 color;\n"
@@ -113,37 +111,28 @@ static const char *fragment_shader_src =
     "varying vec2 v_uv;\n"
 
     "float sdRoundRect(vec2 p, vec2 size, float r) {\n"
-    "    vec2 q = abs(p - size * 0.5) - (size * 0.5 - vec2(r));\n"
-    "    return length(max(q, 0.0)) - r;\n"
+    "	vec2 q = abs(p - size * 0.5) - (size * 0.5 - vec2(r));\n"
+    "	return length(max(q, 0.0)) - r;\n"
     "}\n"
 
     "void main() {\n"
-    "    vec2 p = v_uv * rect_size;\n"
-    "    float dist = sdRoundRect(p, rect_size, radius);\n"
+    "	vec2 p = v_uv * rect_size;\n"
+    "	float dist = sdRoundRect(p, rect_size, radius);\n"
 
-    "    float aa = fwidth(dist);\n"
-    "    float alpha;\n"
+    "   float aa = fwidth(dist);\n"
+    "   float alpha;\n"
 
-    "    if (!outline) {\n"
-    "        alpha = 1.0 - smoothstep(0.0, aa, dist);\n"
-    "    } else {\n"
-    "        float outer = smoothstep(0.0, aa, dist);\n"
-    "        float inner = smoothstep(-border_width, -border_width + aa, dist);\n"
-    "        alpha = inner - outer;\n"
-    "    }\n"
+    "   alpha = 1.0 - smoothstep(0.0, aa, dist);\n"
 
-    "    if (alpha <= 0.01)\n"
-    "        discard;\n"
+    "	vec4 out_color = color;\n"
+    "	out_color.a *= alpha;\n"
 
-    "    vec4 out_color = color;\n"
-    "    out_color.a *= alpha;\n"
-
-    "    if (use_texture) {\n"
-    "       vec4 tex_color = texture2D(tex, v_uv);\n"
+    "	if (use_texture) {\n"
+    "		vec4 tex_color = texture2D(tex, v_uv);\n"
     "       out_color = vec4(tex_color.rgb, out_color.a * tex_color.a);\n"
-    "    }\n"
+    "	}\n"
 
-    "    gl_FragColor = out_color;\n"
+    "	gl_FragColor = out_color;\n"
     "}\n";
 
 static const char *text_vertex_shader_src =
@@ -814,8 +803,6 @@ int init() {
     uni_screen_size = glGetUniformLocation(program, "screen_size");
     uni_radius = glGetUniformLocation(program, "radius");
     uni_use_texture = glGetUniformLocation(program, "use_texture");
-    uni_outline = glGetUniformLocation(program, "outline");
-    uni_border_width = glGetUniformLocation(program, "border_width");
     uni_tex = glGetUniformLocation(program, "tex");
 
     text_program = create_text_program();
@@ -1098,7 +1085,7 @@ void comp_remove_window(window_t *window) {
 void comp_handle_widget_command(window_t *window, const char *command) {
     char widget_id[64];
     float x, y, w, h;
-    int radius, border_width;
+    int radius;
     char color[32];
     char text[256];
     char font_file[64];
@@ -1108,7 +1095,7 @@ void comp_handle_widget_command(window_t *window, const char *command) {
         widget_t *widget = ui_create_widget(widget_id, WIDGET_RECT);
 
         ui_append_widget(window, widget);
-    } else if (sscanf(command, "SET_WIDGET_GEOMETRY:%63[^:]:%f:%f:%f:%f:%d:%d", widget_id, &x, &y, &w, &h, &radius, &border_width) == 7) {
+    } else if (sscanf(command, "SET_WIDGET_GEOMETRY:%63[^:]:%f:%f:%f:%f:%d", widget_id, &x, &y, &w, &h, &radius) == 7) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
         if (!widget) {
@@ -1117,7 +1104,7 @@ void comp_handle_widget_command(window_t *window, const char *command) {
             return;
         }
 
-        ui_widget_set_geometry(widget, x, y, w, h, radius, border_width);
+        ui_widget_set_geometry(widget, x, y, w, h, radius);
     } else if (sscanf(command, "SET_WIDGET_COLOR:%31s", color) == 1) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
@@ -1235,7 +1222,7 @@ void comp_listen_socket() {
 }
 
 void comp_on_mouse_move(int x, int y) {
-    ui_widget_set_geometry(mouse_cursor, x, y, -1, -1, -1, -1);
+    ui_widget_set_geometry(mouse_cursor, x, y, -1, -1, -1);
 }
 
 void comp_on_mouse_down(int x, int y, uint32_t button) {
@@ -1251,6 +1238,25 @@ void comp_on_scroll(int dx, int dy) {
 }
 
 void comp_on_key_down(uint32_t key, uint32_t mods) {
+    switch (key) {
+        case 125: {
+            if (menu_open) {
+                ui_request_hide(sys_ui_menu_win);
+
+                if (requested_window)
+                    focused_window = requested_window;
+                else
+                    focused_window = sys_ui_win;
+            } else {
+                ui_request_render(sys_ui_menu_win);
+
+                focused_window = sys_ui_menu_win;
+            }
+
+            menu_open = !menu_open;
+        }
+    }
+
     printf("  II: comp_on_key_down() -> key pressed: %d\n", key);
 }
 
@@ -1289,15 +1295,15 @@ int main() {
         running = false;
     }
 
-    window_t *sys_ui_win = sys_ui_init();
-    window_t *sys_ui_men = sys_ui_menu();
+    sys_ui_win = sys_ui_init();
+    sys_ui_menu_win = sys_ui_menu();
 
     mouse_win = ui_create_window();
     mouse_cursor = ui_create_widget("sys-cursor", WIDGET_IMAGE);
 
-    GLuint cursor_image = ui_load_texture("assets/mouse.png");
+    GLuint cursor_image = ui_load_texture("assets/cursors/default.png");
 
-    ui_widget_set_geometry(mouse_cursor, mode->hdisplay / 2.0, mode->vdisplay / 2.0, 16, 16, -1, -1);
+    ui_widget_set_geometry(mouse_cursor, mode->hdisplay / 2.0, mode->vdisplay / 2.0, 24, 24, -1);
     ui_widget_set_color(mouse_cursor, "#ffffffff");
     ui_widget_set_image(mouse_cursor, cursor_image);
     ui_append_widget(mouse_win, mouse_cursor);
@@ -1354,7 +1360,7 @@ int main() {
             comp_redraw(sys_ui_win, dt);
 
         if (menu_open)
-            comp_redraw(sys_ui_men, dt);
+            comp_redraw(sys_ui_menu_win, dt);
 
         comp_redraw(mouse_win, dt);
 

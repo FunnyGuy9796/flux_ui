@@ -67,8 +67,6 @@ extern GLint uni_rect_pos;
 extern GLint uni_rect_size;
 extern GLint uni_screen_size;
 extern GLint uni_radius;
-extern GLint uni_outline;
-extern GLint uni_border_width;
 extern GLint uni_use_texture;
 extern GLint uni_tex;
 extern GLuint text_program;

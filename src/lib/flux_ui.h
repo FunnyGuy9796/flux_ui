@@ -13,11 +13,11 @@
 #include <GLES2/gl2ext.h>
 
 #define MAX_WIDGETS 256
+#define MAX_CHILDREN 32
 
 typedef enum {
     WIDGET_NONE,
     WIDGET_RECT,
-    WIDGET_OUTLINE,
     WIDGET_TEXT,
     WIDGET_IMAGE
 } widget_type_t;
@@ -41,13 +41,30 @@ typedef struct Widget widget_t;
 
 typedef void (*widget_enter_fn)(widget_t *self);
 typedef void (*widget_leave_fn)(widget_t *self);
-typedef void (*widget_down_fn)(widget_t *self);
-typedef void (*widget_up_fn)(widget_t *self);
+typedef void (*widget_button_down_fn)(widget_t *self);
+typedef void (*widget_button_up_fn)(widget_t *self);
+typedef void (*widget_key_down_fn)(widget_t *self);
+typedef void (*widget_key_up_fn)(widget_t *self);
 
 typedef void (*window_render_loop_fn)(window_t *self, float dt);
 typedef void (*window_exit_fn)(window_t *self);
 
-struct Widget {
+typedef enum {
+    PARENT_NONE,
+    PARENT_WIDGET,
+    PARENT_WINDOW
+} parent_type_t;
+
+typedef struct {
+    parent_type_t type;
+
+    union {
+        struct Widget *widget;
+        struct Window *window;
+    };
+} widget_parent_t;
+
+typedef struct Widget {
     float x, y, w, h;
     int radius, border_width;
     char color[32];
@@ -56,12 +73,15 @@ struct Widget {
     GLuint texture;
     char id[64];
     widget_type_t type;
+    struct Widget **children;
+    int child_count;
+    widget_parent_t parent;
 
     widget_enter_fn mouse_enter;
     widget_leave_fn mouse_leave;
-    widget_down_fn mouse_btn_down;
-    widget_up_fn mouse_btn_up;
-};
+    widget_button_down_fn mouse_btn_down;
+    widget_button_up_fn mouse_btn_up;
+} widget_t;
 
 typedef struct Window {
     widget_t *widgets[MAX_WIDGETS];
@@ -99,9 +119,8 @@ font_t *ui_load_font(const char *ttf_path, float pixel_height);
 
 void ui_draw_rect(float x, float y, float w, float h, float r, float red, float green, float blue, float alpha);
 void ui_draw_rect_texture(float x, float y, float w, float h, float r, float red, float green, float blue, float alpha, GLuint texture);
-void ui_draw_rect_outline(float x, float y, float w, float h, float r, float bw, float red, float green, float blue, float alpha);
 void ui_draw_text(float x, float y, font_t *font, const char *text, float r, float g, float b, float a);
-void ui_measure_text(const char *text, font_t *font, float *out_width, float *out_height);
+void ui_measure_text(const char *text, font_t *font, float *out_width, float *out_height, float *out_visual_min_y);
 
 window_t *ui_create_window();
 void ui_render_window(window_t *window);
@@ -113,24 +132,19 @@ widget_t *ui_window_get_widget(window_t *window, const char *widget_id);
 void ui_call_render_loop(window_t *window, float dt);
 
 widget_t *ui_create_widget(const char *id, widget_type_t type);
-void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, float radius, float border_width);
+void ui_destroy_widget(widget_t *widget);
+void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, float radius);
 void ui_widget_set_color(widget_t *widg, const char *color);
 void ui_widget_set_text(widget_t *widg, const char *text);
 void ui_widget_set_image(widget_t *widg, GLuint texture);
 void ui_widget_set_font(widget_t *widg, font_t *font);
 font_t *ui_widget_get_font(widget_t *widg);
+void ui_widget_append_child(widget_t *widg, widget_t *child);
 void ui_append_widget(window_t *window, widget_t *widget);
 void ui_remove_widget(window_t *window, widget_t *widget);
 
 void ui_request_render(window_t *window);
 void ui_request_hide(window_t *window);
 void ui_set_render_loop(window_t *window, window_render_loop_fn func);
-
-void ui_window_on_mouse_move(window_t *window, int x, int y);
-void ui_window_on_mouse_down(window_t *window, int x, int y, uint32_t button);
-void ui_window_on_mouse_up(window_t *window, int x, int y, uint32_t button);
-void ui_window_on_scroll(window_t *window, int dx, int dy);
-void ui_window_on_key_down(window_t *window, uint32_t key, uint32_t mods);
-void ui_window_on_key_up(window_t *window, uint32_t key, uint32_t mods);
 
 #endif

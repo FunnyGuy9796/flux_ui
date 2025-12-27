@@ -1,4 +1,5 @@
 #include "flux_ui.h"
+#include "GLES2/gl2.h"
 #include "stb_image.h"
 #include "stb_truetype.h"
 #include "../compositor.h"
@@ -148,34 +149,6 @@ void ui_draw_rect_texture(float x, float y, float w, float h, float r, float red
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
-void ui_draw_rect_outline(float x, float y, float w, float h, float r, float bw, float red, float green, float blue, float alpha) {
-    float verts[] = {
-        0, 0,
-        1, 0,
-        0, 1,
-        1, 1,
-    };
-
-    glUseProgram(program);
-
-    glUniform1i(uni_use_texture, 0);
-    glUniform1i(uni_outline, 1);
-    glUniform1f(uni_border_width, bw);
-    glUniform2f(uni_rect_pos, x, y);
-    glUniform2f(uni_rect_size, w, h);
-    glUniform2f(uni_screen_size, (float)mode->hdisplay, (float)mode->vdisplay);
-    glUniform4f(uni_color, red, green, blue, alpha);
-    glUniform1f(uni_radius, r);
-
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
-
-    glEnableVertexAttribArray(attr_pos);
-    glVertexAttribPointer(attr_pos, 2, GL_FLOAT, GL_FALSE, 0, 0);
-
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-}
-
 static void draw_glyph(float x, float y, float w, float h, float u0, float v0, float u1, float v1, float red, float green, float blue, float alpha, GLuint font_texture){
     float verts[] = {
         0, 0, u0, v0,
@@ -235,10 +208,12 @@ void ui_draw_text(float x, float y, font_t *font, const char *text, float r, flo
     }
 }
 
-void ui_measure_text(const char *text, font_t *font, float *out_width, float *out_height) {
+void ui_measure_text(const char *text, font_t *font, float *out_width, float *out_height, float *out_visual_min_y) {
     float pen_x = 0.0f;
     float pen_y = 0.0f;
     float max_width = 0.0f;
+    float visual_min_y = 1e6f;
+    float visual_max_y = -1e6f;
     float line_height = font->size;
 
     while (*text) {
@@ -260,18 +235,30 @@ void ui_measure_text(const char *text, font_t *font, float *out_width, float *ou
         glyph_t *g = &font->glyphs[(int)c];
 
         pen_x += g->xadvance;
+
+        float glyph_top = g->yoff;
+        float glyph_bottom = g->yoff + g->h;
+
+        if (glyph_top < visual_min_y)
+            visual_min_y = glyph_top;
+
+        if (glyph_bottom > visual_max_y)
+            visual_max_y = glyph_bottom;
     }
 
     if (pen_x > max_width)
         max_width = pen_x;
 
-    float total_height = pen_y + line_height;
+    float total_height = visual_max_y - visual_min_y;
 
     if (out_width)
         *out_width = max_width;
 
     if (out_height)
         *out_height = total_height;
+
+    if (out_visual_min_y)
+        *out_visual_min_y = visual_min_y;
 }
 
 window_t *ui_create_window() {
@@ -314,6 +301,73 @@ window_t *ui_create_window() {
     return window;
 }
 
+static void widget_get_world_pos(widget_t *widget, float *x, float *y) {
+    float pos_x = widget->x;
+    float pos_y = widget->y;
+
+    while (widget->parent.type == PARENT_WIDGET) {
+        widget = widget->parent.widget;
+        pos_x += widget->x;
+        pos_y += widget->y;
+    }
+
+    *x = pos_x;
+    *y = pos_y;
+}
+
+static void render_widget(widget_t *widget) {
+    float r, g, b, a;
+    float pos_x, pos_y;
+
+    widget_get_world_pos(widget, &pos_x, &pos_y);
+
+    if (strlen(widget->color) != 0)
+        ui_hex_to_rgba(widget->color, &r, &g, &b, &a);
+
+    if (widget->parent.type == PARENT_WIDGET) {
+        int x, y, w, h;
+        widget_t *parent = widget->parent.widget;
+
+        x = (int)parent->x;
+        y = (int)parent->y;
+        w = (int)parent->w;
+        h = (int)parent->h;
+
+        y = mode->vdisplay - (y + h);
+
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(x, y, w, h);
+    }
+
+    switch (widget->type) {
+        case WIDGET_RECT: {
+            ui_draw_rect(pos_x, pos_y, widget->w, widget->h, widget->radius, r, g, b, a);
+
+            break;
+        }
+
+        case WIDGET_TEXT: {
+            ui_draw_text(pos_x, pos_y, widget->font, widget->text, r, g, b, a);
+
+            break;
+        }
+
+        case WIDGET_IMAGE: {
+            ui_draw_rect_texture(pos_x, pos_y, widget->w, widget->h, widget->radius, r, g, b, a, widget->texture);
+
+            break;
+        }
+
+        case WIDGET_NONE:
+            break;
+    }
+
+    glDisable(GL_SCISSOR_TEST);
+
+    for (int i = 0; i < widget->child_count; i++)
+        render_widget(widget->children[i]);
+}
+
 void ui_render_window(window_t *window) {
     if (!window || window->widget_count <= 0 || !window->rendered)
         return;
@@ -324,47 +378,13 @@ void ui_render_window(window_t *window) {
     glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    for (int i = 0; i < window->widget_count; i++) {
-        widget_t *w = window->widgets[i];
-        float r, g, b, a;
-
-        if (strlen(w->color) != 0)
-            ui_hex_to_rgba(w->color, &r, &g, &b, &a);
-
-        switch (w->type) {
-            case WIDGET_RECT: {
-                ui_draw_rect(w->x, w->y, w->w, w->h, w->radius, r, g, b, a);
-
-                break;
-            }
-
-            case WIDGET_OUTLINE: {
-                ui_draw_rect_outline(w->x, w->y, w->w, w->h, w->radius, w->border_width, r, g, b, a);
-
-                break;
-            }
-
-            case WIDGET_TEXT: {
-                ui_draw_text(w->x, w->y, w->font, w->text, r, g, b, a);
-
-                break;
-            }
-
-            case WIDGET_IMAGE: {
-                ui_draw_rect_texture(w->x, w->y, w->w, w->h, w->radius, r, g, b, a, w->texture);
-
-                break;
-            }
-
-            case WIDGET_NONE:
-                break;
-        }
-    }
+    for (int i = 0; i < window->widget_count; i++)
+        render_widget(window->widgets[i]);
 }
 
 void ui_destroy_window(window_t *window) {
     for (int i = 0; i < window->widget_count; i++)
-        free(window->widgets[i]);
+        ui_destroy_widget(window->widgets[i]);
 
     memset(window->widgets, 0, sizeof(window->widgets));
 
@@ -402,11 +422,27 @@ widget_t *ui_create_widget(const char id[64], widget_type_t type) {
     
     strcpy(widg->id, id);
     widg->type = type;
+    widg->children = calloc(MAX_CHILDREN, sizeof(widget_t *));
+    widg->child_count = 0;
+    widg->parent.type = PARENT_NONE;
+    widg->parent.widget = NULL;
+    widg->parent.window = NULL;
 
     return widg;
 }
 
-void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, float radius, float border_width) {
+void ui_destroy_widget(widget_t *widget) {
+    if (!widget)
+        return;
+
+    for (int i = 0; i < widget->child_count; i++)
+        ui_destroy_widget(widget->children[i]);
+
+    free(widget->children);
+    free(widget);
+}
+
+void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, float radius) {
     if (x > -1)
         widg->x = x;
 
@@ -421,16 +457,6 @@ void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, 
 
     if (radius > -1)
         widg->radius = radius;
-
-    if (border_width > -1) {
-        if (widg->type != WIDGET_OUTLINE) {
-            printf("  WW: ui_widget_set_geometry() -> widget has a type other than WIDGET_OUTLINE, ignoring border_width\n    widget ID: %s\n", widg->id);
-
-            return;
-        }
-
-        widg->border_width = border_width;
-    }
 }
 
 void ui_widget_set_color(widget_t *widg, const char *color) {
@@ -465,6 +491,46 @@ font_t *ui_widget_get_font(widget_t *widg) {
     return widg->font;
 }
 
+void ui_widget_append_child(widget_t *widg, widget_t *child) {
+    if (!widg) {
+        printf("  EE: ui_widget_append_child() -> attempted to append to an invalid widget\n");
+
+        exit(1);
+    }
+
+    if (!child) {
+        printf("  EE: ui_widget_append_child() -> attempted to append an invalid child\n");
+
+        exit(1);
+    }
+
+    int count = widg->child_count;
+
+    if (count >= MAX_CHILDREN) {
+        printf("  EE: ui_widget_append_child() -> allowed number of children exceeded\n");
+
+        exit(1);
+    }
+
+    for (int i = 0; i < count; i++) {
+        widget_t *curr_widg = widg->children[i];
+
+        if (strcmp(curr_widg->id, child->id) == 0) {
+            widg->children[i] = child;
+
+            return;
+        }
+    }
+
+    widget_parent_t widg_parent;
+    widg_parent.type = PARENT_WIDGET;
+    widg_parent.widget = widg;
+
+    widg->children[count] = child;
+    widg->child_count++;
+    child->parent = widg_parent;
+}
+
 void ui_append_widget(window_t *window, widget_t *widget) {
     if (!window) {
         printf("  EE: ui_append_widget() -> attempted to append to an invalid window\n");
@@ -480,7 +546,7 @@ void ui_append_widget(window_t *window, widget_t *widget) {
 
     int count = window->widget_count;
 
-    if (count > MAX_WIDGETS) {
+    if (count >= MAX_WIDGETS) {
         printf("  EE: ui_append_widget() -> allowed number of widgets exceeded\n");
 
         exit(1);
@@ -499,8 +565,13 @@ void ui_append_widget(window_t *window, widget_t *widget) {
         }
     }
 
+    widget_parent_t widg_parent;
+    widg_parent.type = PARENT_WINDOW;
+    widg_parent.window = window;
+
     window->widgets[count] = widget;
     window->widget_count++;
+    widget->parent = widg_parent;
 }
 
 void ui_remove_widget(window_t *window, widget_t *widget) {
@@ -522,7 +593,8 @@ void ui_remove_widget(window_t *window, widget_t *widget) {
         widget_t *curr_widg = window->widgets[i];
 
         if (strcmp(curr_widg->id, widget->id) == 0) {
-            window->widgets[i] = window->widgets[count];
+            window->widgets[i] = window->widgets[count - 1];
+            window->widgets[count - 1] = NULL;
             window->widget_count--;
         }
     }
