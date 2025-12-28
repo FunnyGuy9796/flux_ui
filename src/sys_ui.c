@@ -100,8 +100,6 @@ window_t *sys_ui_menu() {
     text_x = (200 - width) / 2;
     text_y = (80 - height) / 2 - visual_min_y;
 
-    printf("text position: { x: %.02f, y: %.02f }\n", text_x, text_y);
-
     ui_widget_set_geometry(menu_test_text, text_x, text_y, width, height, 0);
     ui_widget_set_color(menu_test_text, "#ffffffff");
     ui_widget_set_font(menu_test_text, ui_font_body);
@@ -152,7 +150,7 @@ window_t *sys_ui_init() {
     ui_game_image = ui_load_texture("assets/test.jpg");
 
     if (ui_game_image == 0) {
-        printf("  EE: sys_ui_init() -> failed to load ui_game_image\n");
+        printf("  EE: (sys_ui.c) sys_ui_init() -> failed to load ui_game_image\n");
 
         exit(1);
     }

@@ -2,6 +2,8 @@
 #include "lib/flux_ui.h"
 #include "sys_ui.h"
 #include "input.h"
+#include "../api/flux_api.h"
+#include <fcntl.h>
 
 typedef struct Window window_t;
 
@@ -48,19 +50,14 @@ static uint32_t previous_fb = 0;
 static drmModeCrtc *orig_crtc = NULL;
 static volatile sig_atomic_t running = 1;
 static int frame_pending = 0;
-static bool menu_open = true;
-
-typedef struct {
-    unsigned long win_id;
-    char request[256];
-} WindowRequest;
+static bool menu_open = false;
 
 typedef struct {
     unsigned long id;
     window_t *window;
 } WindowEntry;
 
-static int server_fd, client_fd;
+static int server_fd;
 static struct sockaddr_un addr;
 
 static WindowEntry window_registry[MAX_WINDOWS];
@@ -73,6 +70,9 @@ static window_t *sys_ui_menu_win;
 static window_t *mouse_win;
 
 static widget_t *mouse_cursor;
+
+static int active_clients[MAX_CLIENTS];
+static int client_count = 0;
 
 static const float comp_quad[] = {
     -1.0f, -1.0f,
@@ -229,7 +229,7 @@ static uint32_t get_fb_for_bo(struct gbm_bo *bo) {
     );
 
     if (ret) {
-        printf("EE: drmModeAddFB2 failed: %s\n", strerror(errno));
+        printf("EE: (compositor.c) get_fb_for_bo() -> drmModeAddFB2 failed: %s\n", strerror(errno));
 
         return 0;
     }
@@ -239,38 +239,9 @@ static uint32_t get_fb_for_bo(struct gbm_bo *bo) {
     return fb_id;
 }
 
-static void page_flip_handler(int fd, unsigned int frame, unsigned int sec, 
-                              unsigned int usec, void *data) {
+static void page_flip_handler(int fd, unsigned int frame, unsigned int sec, unsigned int usec, void *data) {
     int *waiting = (int *)data;
     *waiting = 0;
-}
-
-static void wait_for_vblank() {
-    drmEventContext ev = {
-        .version = DRM_EVENT_CONTEXT_VERSION,
-        .page_flip_handler = page_flip_handler
-    };
-
-    struct pollfd pfd = {
-        .fd = drm_fd,
-        .events = POLLIN
-    };
-
-    while (frame_pending) {
-        int ret = poll(&pfd, 1, -1);
-
-        if (ret < 0) {
-            if (errno == EINTR)
-                continue;
-
-            printf("  EE: wait_for_vblank() -> failed to poll\n");
-
-            exit(1);
-        }
-
-        if (pfd.revents & POLLIN)
-            drmHandleEvent(drm_fd, &ev);
-    }
 }
 
 static GLuint compile_shader(GLenum type, const char *src) {
@@ -287,7 +258,7 @@ static GLuint compile_shader(GLenum type, const char *src) {
 
         glGetShaderInfoLog(shader, sizeof(log), NULL, log);
 
-        printf("  EE: compile_shader() -> %s\n", log);
+        printf("  EE: (compositor.c) compile_shader() -> %s\n", log);
 
         glDeleteShader(shader);
 
@@ -315,7 +286,7 @@ static GLuint create_program() {
 
         glGetProgramInfoLog(prog, sizeof(log), NULL, log);
 
-        printf("  EE: create_program() -> %s\n", log);
+        printf("  EE: (compositor.c) create_program() -> %s\n", log);
 
         glDeleteProgram(prog);
 
@@ -346,7 +317,7 @@ static GLuint create_text_program() {
 
         glGetProgramInfoLog(prog, sizeof(log), NULL, log);
 
-        printf("  EE: create_text_program() -> %s\n", log);
+        printf("  EE: (compositor.c) create_text_program() -> %s\n", log);
 
         glDeleteProgram(prog);
 
@@ -377,7 +348,7 @@ static GLuint create_comp_program() {
 
         glGetProgramInfoLog(prog, sizeof(log), NULL, log);
 
-        printf("  EE: create_comp_program() -> %s\n", log);
+        printf("  EE: (compositor.c) create_comp_program() -> %s\n", log);
 
         glDeleteProgram(prog);
 
@@ -391,7 +362,7 @@ static GLuint create_comp_program() {
 }
 
 void cleanup() {
-    printf("  cleaning up...\n");
+    printf("  II: (compositor.c) cleanup() -> cleaning up...\n");
 
     if (previous_bo) {
         if (previous_fb)
@@ -494,25 +465,25 @@ int init() {
     drm_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
 
     if (drm_fd == -1) {
-        printf("  EE: init() -> failed to open '/dev/dri/card0'\n  %s\n", strerror(errno));
+        printf("  EE: (compositor.c) init() -> failed to open '/dev/dri/card0'\n  %s\n", strerror(errno));
 
         return 1;
     }
 
-    printf("  video card... [OK]\n");
+    printf("  II: (compositor.c) init() -> video card... [OK]\n");
     
     if (drmSetMaster(drm_fd) != 0) {
-        printf("  WW: init() -> failed to become DRM master: %s\n", strerror(errno));
+        printf("  WW: (compositor.c) init() -> failed to become DRM master: %s\n", strerror(errno));
 
         return 1;
     }
     
-    printf("  DRM master... [OK]\n");
+    printf("  II: (compositor.c) init() -> DRM master... [OK]\n");
 
     resources = drmModeGetResources(drm_fd);
     
     if (!resources) {
-        printf("  EE: init() -> drmModeGetResources failed\n");
+        printf("  EE: (compositor.c) init() -> drmModeGetResources failed\n");
 
         return 1;
     }
@@ -530,34 +501,33 @@ int init() {
     }
 
     if (!connector) {
-        printf("  EE: init() -> failed to connect to the display\n");
+        printf("  EE: (compositor.c) init() -> failed to connect to the display\n");
 
         return 1;
     }
 
-    printf("  display connector... [OK]\n");
+    printf("  II: (compositor.c) init() -> display connector... [OK]\n");
 
     mode = &connector->modes[0];
 
-    printf("  display mode: %dx%d @%dHz... [OK]\n", 
-           mode->hdisplay, mode->vdisplay, mode->vrefresh);
+    printf("  II: (compositor.c) init() -> display mode: %dx%d @%dHz... [OK]\n", mode->hdisplay, mode->vdisplay, mode->vrefresh);
 
     encoder = drmModeGetEncoder(drm_fd, connector->encoder_id);
 
     if (!encoder) {
-        printf("  EE: init() -> no encoder found\n");
+        printf("  EE: (compositor.c) init() -> no encoder found\n");
 
         return 1;
     }
 
     crtc_id = encoder->crtc_id;
 
-    printf("  CRTC ID: %u... [OK]\n", crtc_id);
+    printf("  II: (compositor.c) init() -> CRTC ID: %u... [OK]\n", crtc_id);
 
     orig_crtc = drmModeGetCrtc(drm_fd, crtc_id);
 
     if (!orig_crtc) {
-        printf("  EE: init() -> failed to save original CRTC\n");
+        printf("  EE: (compositor.c) init() -> failed to save original CRTC\n");
 
         return 1;
     }
@@ -565,12 +535,12 @@ int init() {
     gbm = gbm_create_device(drm_fd);
 
     if (!gbm) {
-        printf("  EE: init() -> failed to create GBM device\n");
+        printf("  EE: (compositor.c) init() -> failed to create GBM device\n");
 
         return 1;
     }
 
-    printf("  GBM device... [OK]\n");
+    printf("  II: (compositor.c) init() -> GBM device... [OK]\n");
 
     gbm_surface = gbm_surface_create(gbm,
         mode->hdisplay,
@@ -580,31 +550,31 @@ int init() {
     );
     
     if (!gbm_surface) {
-        printf("  EE: init() -> failed to create GBM surface with ARGB8888\n");
+        printf("  EE: (compositor.c) init() -> failed to create GBM surface with ARGB8888\n");
 
         return 1;
     }
     
-    printf("  GBM surface (ARGB8888)... [OK]\n");
+    printf("  II: (compositor.c) init() -> GBM surface (ARGB8888)... [OK]\n");
 
     egl_display = eglGetDisplay((EGLNativeDisplayType)gbm);
 
     if (egl_display == EGL_NO_DISPLAY) {
-        printf("  EE: init() -> eglGetDisplay failed\n");
+        printf("  EE: (compositor.c) init() -> eglGetDisplay failed\n");
 
         return 1;
     }
 
     if (!eglInitialize(egl_display, NULL, NULL)) {
-        printf("  EE: init() -> eglInitialize failed\n");
+        printf("  EE: (compositor.c) init() -> eglInitialize failed\n");
 
         return 1;
     }
 
-    printf("  EGL display... [OK]\n");
+    printf("  II: (compositor.c) init() -> EGL display... [OK]\n");
     
     if (!eglBindAPI(EGL_OPENGL_ES_API)) {
-        printf("  EE: init() -> eglBindAPI failed (error: 0x%x)\n", eglGetError());
+        printf("  EE: (compositor.c) init() -> eglBindAPI failed (error: 0x%x)\n", eglGetError());
 
         return 1;
     }
@@ -623,7 +593,7 @@ int init() {
     };
 
     if (!eglChooseConfig(egl_display, config_attrs, configs, 128, &num_configs) || num_configs < 1) {
-        printf("  EE: init() -> eglChooseConfig failed (error: 0x%x)\n", eglGetError());
+        printf("  EE: (compositor.c) init() -> eglChooseConfig failed (error: 0x%x)\n", eglGetError());
 
         return 1;
     }
@@ -657,13 +627,13 @@ int init() {
 
             eglGetConfigAttrib(egl_display, egl_config, EGL_NATIVE_VISUAL_ID, &visual_id);
         } else {
-            printf("  EE: init() -> could not find matching EGL config\n");
+            printf("  EE: (compositor.c) init() -> could not find matching EGL config\n");
 
             egl_config = configs[0];
         }
     }
 
-    printf("  EGL config... [OK]\n");
+    printf("  II: (compositor.c) init() -> EGL config... [OK]\n");
 
     EGLint context_attrs[] = {
         EGL_CONTEXT_CLIENT_VERSION, 2,
@@ -673,12 +643,12 @@ int init() {
     egl_context = eglCreateContext(egl_display, egl_config, EGL_NO_CONTEXT, context_attrs);
 
     if (egl_context == EGL_NO_CONTEXT) {
-        printf("  EE: init() -> eglCreateContext failed (error: 0x%x)\n", eglGetError());
+        printf("  EE: (compositor.c) init() -> eglCreateContext failed (error: 0x%x)\n", eglGetError());
 
         return 1;
     }
 
-    printf("  EGL context... [OK]\n");
+    printf("  II: (compositor.c) init() -> EGL context... [OK]\n");
     
     EGLint red, green, blue, alpha, native_visual;
 
@@ -697,7 +667,7 @@ int init() {
     if (egl_surface == EGL_NO_SURFACE) {
         EGLint error = eglGetError();
 
-        printf("  EE: init() -> eglCreateWindowSurface failed\n");
+        printf("  EE: (compositor.c) init() -> eglCreateWindowSurface failed\n");
         
         switch (error) {
             case EGL_BAD_MATCH:
@@ -722,8 +692,7 @@ int init() {
                 break;
         }
         
-        PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC eglCreatePlatformWindowSurfaceEXT = 
-            (PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC)eglGetProcAddress("eglCreatePlatformWindowSurfaceEXT");
+        PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC eglCreatePlatformWindowSurfaceEXT = (PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC)eglGetProcAddress("eglCreatePlatformWindowSurfaceEXT");
         
         if (eglCreatePlatformWindowSurfaceEXT) {
             egl_surface = eglCreatePlatformWindowSurfaceEXT(
@@ -736,12 +705,12 @@ int init() {
             if (egl_surface == EGL_NO_SURFACE) {
                 error = eglGetError();
 
-                printf("  EE: init() -> eglCreatePlatformWindowSurfaceEXT also failed (error: 0x%x)\n", error);
+                printf("  EE: (compositor.c) init() -> eglCreatePlatformWindowSurfaceEXT also failed (error: 0x%x)\n", error);
 
                 return 1;
             }
         } else {
-            printf("  EE: init() -> eglCreatePlatformWindowSurfaceEXT not available\n");
+            printf("  EE: (compositor.c) init() -> eglCreatePlatformWindowSurfaceEXT not available\n");
             
             EGLint alt_config_attrs[] = {
                 EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
@@ -758,14 +727,14 @@ int init() {
                 egl_surface = eglCreateWindowSurface(egl_display, alt_config, (EGLNativeWindowType)gbm_surface, surface_attrs);
                 
                 if (egl_surface == EGL_NO_SURFACE) {
-                    printf("  EE: init() -> alternative config also failed (error: 0x%x)\n", eglGetError());
+                    printf("  EE: (compositor.c) init() -> alternative config also failed (error: 0x%x)\n", eglGetError());
 
                     return 1;
                 }
                 
                 egl_config = alt_config;
             } else {
-                printf("  EE: init() -> could not find alternative config\n");
+                printf("  EE: (compositor.c) init() -> could not find alternative config\n");
 
                 return 1;
             }
@@ -773,12 +742,12 @@ int init() {
     }
 
     if (!eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context)) {
-        printf("  EE: init() -> eglMakeCurrent failed\n");
+        printf("  EE: (compositor.c) init() -> eglMakeCurrent failed\n");
 
         return 1;
     }
 
-    printf("  EGL surface... [OK]\n");
+    printf("  II: (compositor.c) init() -> EGL surface... [OK]\n");
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -789,7 +758,7 @@ int init() {
     program = create_program();
 
     if (!program) {
-        printf("  EE: init() -> failed to create main shader program\n");
+        printf("  EE: (compositor.c) init() -> failed to create main shader program\n");
 
         return 1;
     }
@@ -808,7 +777,7 @@ int init() {
     text_program = create_text_program();
 
     if (!text_program) {
-        printf("  EE: init() -> failed to create text shader program\n");
+        printf("  EE: (compositor.c) init() -> failed to create text shader program\n");
 
         return 1;
     }
@@ -824,7 +793,7 @@ int init() {
     comp_program = create_comp_program();
 
     if (!comp_program) {
-        printf("  EE: init() -> failed to create compositor shader program\n");
+        printf("  EE: (compositor.c) init() -> failed to create compositor shader program\n");
 
         return 1;
     }
@@ -841,13 +810,13 @@ int render_frame() {
     GLenum err = glGetError();
     
     if (err != GL_NO_ERROR) {
-        printf("  EE: OpenGL error after drawing frame: 0x%x\n", err);
+        printf("  EE: (compositor.c) render_frame() -> OpenGL error after drawing frame: 0x%x\n", err);
 
         return 1;
     }
     
     if (!eglSwapBuffers(egl_display, egl_surface)) {
-        printf("  EE: render_frame() -> eglSwapBuffers failed (error: 0x%x)\n", eglGetError());
+        printf("  EE: (compositor.c) render_frame() -> eglSwapBuffers failed (error: 0x%x)\n", eglGetError());
 
         return 1;
     }
@@ -855,7 +824,7 @@ int render_frame() {
     struct gbm_bo *bo = gbm_surface_lock_front_buffer(gbm_surface);
     
     if (!bo) {
-        printf("  EE: render_frame() -> gbm_surface_lock_front_buffer failed\n");
+        printf("  EE: (compositor.c) render_frame() -> gbm_surface_lock_front_buffer failed\n");
 
         return 1;
     }
@@ -869,11 +838,10 @@ int render_frame() {
     }
     
     if (!previous_bo) {
-        int ret = drmModeSetCrtc(drm_fd, crtc_id, fb_id, 0, 0,
-                                 &connector->connector_id, 1, mode);
+        int ret = drmModeSetCrtc(drm_fd, crtc_id, fb_id, 0, 0, &connector->connector_id, 1, mode);
         
         if (ret) {
-            printf("  EE: render_frame() -> drmModeSetCrtc failed: %s\n", strerror(errno));
+            printf("  EE: (compositor.c) render_frame() -> drmModeSetCrtc failed: %s\n", strerror(errno));
             gbm_surface_release_buffer(gbm_surface, bo);
 
             return 1;
@@ -889,7 +857,7 @@ int render_frame() {
             &frame_pending);
         
         if (ret) {
-            printf("  EE: render_frame() -> drmModePageFlip failed: %s\n", strerror(errno));
+            printf("  EE: (compositor.c) render_frame() -> drmModePageFlip failed: %s\n", strerror(errno));
             gbm_surface_release_buffer(gbm_surface, bo);
 
             return 1;
@@ -910,11 +878,11 @@ int render_frame() {
             ret = poll(&fds, 1, 100);
             
             if (ret < 0) {
-                printf("  EE: render_frame() -> poll failed: %s\n", strerror(errno));
+                printf("  EE: (compositor.c) render_frame() -> poll failed: %s\n", strerror(errno));
 
                 break;
             } else if (ret == 0) {
-                printf("  WW: render_frame() -> poll timeout waiting for page flip (attempt %d/10)\n", ++timeout_count);
+                printf("  WW: (compositor.c) render_frame() -> poll timeout waiting for page flip (attempt %d/10)\n", ++timeout_count);
 
                 continue;
             }
@@ -923,7 +891,7 @@ int render_frame() {
                 ret = drmHandleEvent(drm_fd, &ev);
 
                 if (ret) {
-                    printf("  EE: render_frame() -> drmHandleEvent failed: %s\n", strerror(errno));
+                    printf("  EE: (compositor.c) render_frame() -> drmHandleEvent failed: %s\n", strerror(errno));
                     
                     break;
                 }
@@ -931,7 +899,7 @@ int render_frame() {
         }
         
         if (frame_pending) {
-            printf("  EE: render_frame() -> page flip never completed after 10 timeouts\n");
+            printf("  EE: (compositor.c) render_frame() -> page flip never completed after 10 timeouts\n");
             
             return 1;
         }
@@ -966,7 +934,7 @@ void comp_draw_texture(GLuint tex) {
 
 void comp_redraw(window_t *window, float dt) {
     if (!window) {
-        printf("  EE: init() -> attempted to redraw invalid window\n");
+        printf("  EE: (compositor.c) comp_redraw() -> attempted to redraw invalid window\n");
         
         cleanup();
         exit(1);
@@ -987,7 +955,7 @@ int comp_create_socket() {
     server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
 
     if (server_fd < 0) {
-        printf("  EE: comp_create_socket() -> failed to create server_fd\n");
+        printf("  EE: (compositor.c) comp_create_socket() -> failed to create server_fd\n");
 
         return 1;
     }
@@ -995,13 +963,13 @@ int comp_create_socket() {
     int flags = fcntl(server_fd, F_GETFL, 0);
 
     if (flags == -1) {
-        printf("  EE: comp_create_socket() -> fcntl F_GETFL failed\n");
+        printf("  EE: (compositor.c) comp_create_socket() -> fcntl F_GETFL failed\n");
 
         return 1;
     }
 
     if (fcntl(server_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        printf("  EE: comp_create_socket() -> fcntl F_SETFL failed\n");
+        printf("  EE: (compositor.c) comp_create_socket() -> fcntl F_SETFL failed\n");
 
         return 1;
     }
@@ -1015,31 +983,31 @@ int comp_create_socket() {
     strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
 
     if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        printf("  EE: comp_create_socket() -> failed to bind server socket\n");
+        printf("  EE: (compositor.c) comp_create_socket() -> failed to bind server socket\n");
 
         return 1;
     }
 
     if (listen(server_fd, 5) < 0) {
-        printf("  EE: comp_create_socket() -> server failed to listen\n");
+        printf("  EE: (compositor.c) comp_create_socket() -> server failed to listen\n");
 
         return 1;
     }
 
-    printf("  API socket... [OK]\n");
+    printf("  II: (compositor.c) init() -> API socket... [OK]\n");
 
     return 0;
 }
 
 unsigned long comp_register_window(window_t *window) {
     if (!window) {
-        printf("  EE: comp_register_window() -> invalid window\n");
+        printf("  EE: (compositor.c) comp_register_window() -> invalid window\n");
 
         return 0;
     }
 
     if (registry_count >= MAX_WINDOWS) {
-        printf("  EE: comp_register_window() -> window registry full\n");
+        printf("  EE: (compositor.c) comp_register_window() -> window registry full\n");
 
         return 0;
     }
@@ -1055,13 +1023,13 @@ unsigned long comp_register_window(window_t *window) {
 
 void comp_remove_window(window_t *window) {
     if (!window) {
-        printf("  EE: comp_remove_window() -> invalid window\n");
+        printf("  EE: (compositor.c) comp_remove_window() -> invalid window\n");
 
         return;
     }
 
     if (registry_count == 0) {
-        printf("  EE: comp_remove_window() -> window registry empty\n");
+        printf("  EE: (compositor.c) comp_remove_window() -> window registry empty\n");
 
         return;
     }
@@ -1079,7 +1047,7 @@ void comp_remove_window(window_t *window) {
         }
     }
 
-    printf("  WW: comp_remove_window() -> window %lu not found\n", id);
+    printf("  WW: (compositor.c) comp_remove_window() -> window %lu not found\n", id);
 }
 
 void comp_handle_widget_command(window_t *window, const char *command) {
@@ -1089,47 +1057,48 @@ void comp_handle_widget_command(window_t *window, const char *command) {
     char color[32];
     char text[256];
     char font_file[64];
-    float font_size;
+    int font_size;
+    widget_type_t widg_type;
 
-    if (sscanf(command, "CREATE_WIDGET:%63[^:]", widget_id) == 1) {
-        widget_t *widget = ui_create_widget(widget_id, WIDGET_RECT);
+    if (sscanf(command, "CREATE_WIDGET:%63[^:]:%u", widget_id, &widg_type) == 2) {
+        widget_t *widget = ui_create_widget(widget_id, widg_type);
 
         ui_append_widget(window, widget);
-    } else if (sscanf(command, "SET_WIDGET_GEOMETRY:%63[^:]:%f:%f:%f:%f:%d", widget_id, &x, &y, &w, &h, &radius) == 7) {
+    } else if (sscanf(command, "SET_WIDGET_GEOMETRY:%63[^:]:%f:%f:%f:%f:%d", widget_id, &x, &y, &w, &h, &radius) == 6) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
         if (!widget) {
-            printf("  WW: comp_handle_widget_command() -> SET_WIDGET_GEOMETRY on invalid widget\n");
+            printf("  WW: (compositor.c) comp_handle_widget_command() -> SET_WIDGET_GEOMETRY on invalid widget\n");
 
             return;
         }
 
         ui_widget_set_geometry(widget, x, y, w, h, radius);
-    } else if (sscanf(command, "SET_WIDGET_COLOR:%31s", color) == 1) {
+    } else if (sscanf(command, "SET_WIDGET_COLOR:%63[^:]:%31s", widget_id, color) == 2) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
         if (!widget) {
-            printf("  WW: comp_handle_widget_command() -> SET_WIDGET_COLOR on invalid widget\n");
+            printf("  WW: (compositor.c) comp_handle_widget_command() -> SET_WIDGET_COLOR on invalid widget\n");
 
             return;
         }
 
         ui_widget_set_color(widget, color);
-    } else if (sscanf(command, "SET_WIDGET_TEXT:%255s", text) == 1) {
+    } else if (sscanf(command, "SET_WIDGET_TEXT:%63[^:]:%255s", widget_id, text) == 2) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
         if (!widget) {
-            printf("  WW: comp_handle_widget_command() -> SET_WIDGET_TEXT on invalid widget\n");
+            printf("  WW: (compositor.c) comp_handle_widget_command() -> SET_WIDGET_TEXT on invalid widget\n");
 
             return;
         }
 
         ui_widget_set_text(widget, text);
-    } else if (sscanf(command, "LOAD_WIDGET_FONT:%63s:%f", font_file, &font_size) == 2) {
+    } else if (sscanf(command, "SET_WIDGET_FONT:%63[^:]:%63s:%d", widget_id, font_file, &font_size) == 3) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
         if (!widget) {
-            printf("  WW: comp_handle_widget_command() -> LOAD_WIDGET_FONT on invalid widget\n");
+            printf("  WW: (compositor.c) comp_handle_widget_command() -> LOAD_WIDGET_FONT on invalid widget\n");
 
             return;
         }
@@ -1137,6 +1106,16 @@ void comp_handle_widget_command(window_t *window, const char *command) {
         font_t *font = ui_load_font(font_file, font_size);
 
         ui_widget_set_font(widget, font);
+    } else if (sscanf(command, "REMOVE_WIDGET:%63s", widget_id) == 1) {
+        widget_t *widget = ui_window_get_widget(window, widget_id);
+
+        if (!widget) {
+            printf("  WW: (compositor.c) comp_handle_widget_command() -> REMOVE_WIDGET on invalid widget\n");
+
+            return;
+        }
+
+        ui_remove_widget(window, widget);
     }
 }
 
@@ -1150,75 +1129,88 @@ window_t *comp_get_window(unsigned long id) {
 }
 
 void comp_listen_socket() {
-    client_fd = accept(server_fd, NULL, NULL);
+    int new_client = accept(server_fd, NULL, NULL);
 
-    if (client_fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
-            return;
+    if (new_client >= 0) {
+        if (client_count < MAX_CLIENTS) {
+            int flags = fcntl(new_client, F_GETFL, 0);
 
-        printf("  EE: comp_listen_socket() -> server failed to accept clients\n");
-        
-        return;
+            fcntl(new_client, F_SETFL, flags | O_NONBLOCK);
+            
+            active_clients[client_count++] = new_client;
+
+            printf("  II: comp_listen_socket() -> new client connected (fd: %d)\n", new_client);
+        } else
+            close(new_client);
     }
 
-    WindowRequest request;
-    ssize_t bytes = recv(client_fd, &request, sizeof(request), 0);
+    for (int i = 0; i < client_count; i++) {
+        WindowRequest request;
+        ssize_t bytes = recv(active_clients[i], &request, sizeof(request), 0);
 
-    if (bytes == sizeof(request)) {
-        printf("  II: comp_listen_socket() -> request received: %s\n", request.request);
+        if (bytes == sizeof(request)) {
+            printf("  II: (compositor.c) comp_listen_socket() -> request received: %s\n", request.request);
 
-        if (strcmp(request.request, "CREATE_WINDOW") == 0) {
-            window_t *new_win = ui_create_window();
+            if (strcmp(request.request, "CREATE_WINDOW") == 0) {
+                window_t *new_win = ui_create_window();
 
-            unsigned long id = comp_register_window(new_win);
+                unsigned long id = comp_register_window(new_win);
 
-            send(client_fd, &id, sizeof(id), 0);
-        } else {
-            window_t *window = comp_get_window(request.win_id);
-
-            if (window) {
-                if (strcmp(request.request, "RENDER") == 0)
-                    comp_redraw(window, 0.016f);
-                else if (strcmp(request.request, "SHOW") == 0)
-                    ui_request_render(window);
-                else if (strcmp(request.request, "HIDE") == 0)
-                    ui_request_hide(window);
-                else if (strcmp(request.request, "DESTROY") == 0) {
-                    ui_destroy_window(window);
-
-                    comp_remove_window(window);
-
-                    focused_window = window_registry[registry_count].window;
-                } else if (strncmp(request.request, "CREATE_WIDGET:", 14) == 0)
-                    comp_handle_widget_command(window, request.request);
-                else if (strncmp(request.request, "SET_WIDGET_GEOMETRY:", 20) == 0)
-                    comp_handle_widget_command(window, request.request);
-                else if (strncmp(request.request, "SET_WIDGET_COLOR:", 17) == 0)
-                    comp_handle_widget_command(window, request.request);
-                else if (strncmp(request.request, "SET_WIDGET_TEXT:", 16) == 0)
-                    comp_handle_widget_command(window, request.request);
-                else if (strncmp(request.request, "LOAD_WIDGET_FONT:", 17) == 0)
-                    comp_handle_widget_command(window, request.request);
-                else {
-                    printf("  EE: cmp_listen_socket() -> invalid command from window ID %lu\n", request.win_id);
-
-                    send(client_fd, "FAILED", 6, 0);
-
-                    return;
-                }
-
-                send(client_fd, "OK", 2, 0);
+                send(active_clients[i], &id, sizeof(id), 0);
             } else {
-                printf("  EE: cmp_listen_socket() -> window ID %lu not found\n", request.win_id);
+                window_t *window = comp_get_window(request.id);
 
-                const char *err = "ERROR: invalid window";
+                if (window) {
+                    if (strcmp(request.request, "RENDER") == 0)
+                        requested_window = window;
+                    else if (strcmp(request.request, "SHOW") == 0)
+                        ui_request_render(window);
+                    else if (strcmp(request.request, "HIDE") == 0)
+                        ui_request_hide(window);
+                    else if (strcmp(request.request, "DESTROY") == 0) {
+                        comp_remove_window(window);
 
-                send(client_fd, err, strlen(err), 0);
+                        requested_window = window_registry[registry_count].window;
+                    } else if (strncmp(request.request, "CREATE_WIDGET:", 14) == 0)
+                        comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_GEOMETRY:", 20) == 0)
+                        comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_COLOR:", 17) == 0)
+                        comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_TEXT:", 16) == 0)
+                        comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "LOAD_WIDGET_FONT:", 17) == 0)
+                        comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "REMOVE_WIDGET:", 14) == 0)
+                        comp_handle_widget_command(window, request.request);
+                    else {
+                        printf("  EE: (compositor.c) comp_listen_socket() -> invalid command from window ID %lu\n", request.id);
+
+                        const char *err = "ERROR: invalid command";
+
+                        send(active_clients[i], err, strlen(err), 0);
+
+                        continue;
+                    }
+
+                    send(active_clients[i], "OK", 2, 0);
+                } else {
+                    printf("  EE: (compositor.c) comp_listen_socket() -> window ID %lu not found\n", request.id);
+
+                    const char *err = "ERROR: invalid window";
+
+                    send(active_clients[i], err, strlen(err), 0);
+                }
             }
+        } else if (bytes == 0) {
+            printf("  II: (compositor.c) comp_listen_socket() -> client disconnected (fd: %d)\n", active_clients[i]);
+
+            close(active_clients[i]);
+
+            active_clients[i] = active_clients[--client_count];
+            i--;
         }
     }
-
-    close(client_fd);
 }
 
 void comp_on_mouse_move(int x, int y) {
@@ -1226,15 +1218,15 @@ void comp_on_mouse_move(int x, int y) {
 }
 
 void comp_on_mouse_down(int x, int y, uint32_t button) {
-
+    
 }
 
 void comp_on_mouse_up(int x, int y, uint32_t button) {
-
+    
 }
 
 void comp_on_scroll(int dx, int dy) {
-
+    
 }
 
 void comp_on_key_down(uint32_t key, uint32_t mods) {
@@ -1254,14 +1246,16 @@ void comp_on_key_down(uint32_t key, uint32_t mods) {
             }
 
             menu_open = !menu_open;
+
+            return;
         }
     }
 
-    printf("  II: comp_on_key_down() -> key pressed: %d\n", key);
+    printf("  II: (compositor.c) comp_on_key_down() -> key pressed: %d\n", key);
 }
 
 void comp_on_key_up(uint32_t key, uint32_t mods) {
-
+    
 }
 
 int main() {
@@ -1269,12 +1263,13 @@ int main() {
     signal(SIGTERM, handle_signal);
     signal(SIGHUP, handle_signal);
 
-    printf("---------- FluxUI ----------\n  initializing...\n");
+    printf("---------- FluxUI ----------\n");
+    printf("  II: (compositor.c) main() -> initializing...\n");
 
     int init_status = init();
 
     if (init_status != 0) {
-        printf("  EE: main() -> an error occurred in init()\n");
+        printf("  EE: (compositor.c) main() -> an error occurred in init()\n");
 
         running = false;
     }
@@ -1282,7 +1277,7 @@ int main() {
     int input_status = input_init();
 
     if (input_status != 0) {
-        printf("  EE: main() -> an error occurred in input_init()\n");
+        printf("  EE: (compositor.c) main() -> an error occurred in input_init()\n");
 
         running = false;
     }
@@ -1290,7 +1285,7 @@ int main() {
     int socket_status = comp_create_socket();
 
     if (socket_status != 0) {
-        printf("  EE: main() -> an error occurred in comp_create_socket()\n");
+        printf("  EE: (compositor.c) main() -> an error occurred in comp_create_socket()\n");
 
         running = false;
     }
@@ -1313,29 +1308,39 @@ int main() {
 
     clock_gettime(CLOCK_MONOTONIC, &last_time);
 
-    struct pollfd fds = {
-        .fd = input_get_fd(),
-        .events = POLLIN,
-    };
+    struct pollfd fds[2];
+    
+    fds[0].fd = drm_fd;
+    fds[0].events = POLLIN;
+    fds[1].fd = input_get_fd();
+    fds[1].events = POLLIN;
+
+    long unsigned int frame_count = 0;
+    bool opened = false;
 
     while (running) {
-        int poll_ret = poll(&fds, 1, 16);
+        int poll_ret = poll(fds, 2, 16);
 
         if (poll_ret < 0) {
             if (errno == EINTR)
                 continue;
 
-            printf("  EE: main() -> poll failed\n");
+            printf("  EE: (compositor.c) main() -> poll failed\n");
 
             break;
         }
 
-        if (fds.revents & POLLIN)
+        if (fds[1].revents & POLLIN)
             input_process_event();
 
-        fflush(stdout);
+        if (fds[0].revents & POLLIN) {
+            drmEventContext ev = {
+                .version = DRM_EVENT_CONTEXT_VERSION,
+                .page_flip_handler = page_flip_handler
+            };
 
-        wait_for_vblank();
+            drmHandleEvent(drm_fd, &ev);
+        }
 
         comp_listen_socket();
 
@@ -1347,34 +1352,46 @@ int main() {
 
         last_time = now;
 
-        if (!focused_window) {
-            registry_count = 0;
-            menu_open = false;
-            requested_window = NULL;
-            focused_window = sys_ui_win;
+        if (frame_count > 10 && !opened) {
+            system("./test &");
+
+            opened = true;
         }
 
-        if (requested_window)
-            comp_redraw(requested_window, dt);
-        else
-            comp_redraw(sys_ui_win, dt);
+        if (!frame_pending) {
+            if (!focused_window) {
+                registry_count = 0;
+                menu_open = false;
+                requested_window = NULL;
+                focused_window = sys_ui_win;
+            }
 
-        if (menu_open)
-            comp_redraw(sys_ui_menu_win, dt);
+            if (requested_window)
+                comp_redraw(requested_window, dt);
+            else
+                comp_redraw(sys_ui_win, dt);
 
-        comp_redraw(mouse_win, dt);
+            if (menu_open)
+                comp_redraw(sys_ui_menu_win, dt);
 
-        int ret = render_frame();
-    
-        if (ret != 0) {
-            printf("\n  EE: main() -> render_frame failed\n");
-            
-            running = false;
+            comp_redraw(mouse_win, dt);
+
+            int ret = render_frame();
+        
+            if (ret != 0) {
+                printf("\n  EE: (compositor.c) main() -> render_frame failed\n");
+                
+                running = false;
+            }
+
+            frame_count++;
         }
     }
     
     cleanup();
     input_cleanup();
+
+    printf("  II: (compositor.c) main() -> finished\n");
 
     return 0;
 }

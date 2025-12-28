@@ -11,7 +11,7 @@ GLuint ui_load_texture(const char *filename) {
     unsigned char *data = stbi_load(filename, &width, &height, &channels, 4);
 
     if (!data) {
-        printf("  EE: load_texture() -> failed to load image: %s\n", filename);
+        printf("  EE: (flux_ui.c) load_texture() -> failed to load image: %s\n", filename);
 
         return 0;
     }
@@ -210,11 +210,9 @@ void ui_draw_text(float x, float y, font_t *font, const char *text, float r, flo
 
 void ui_measure_text(const char *text, font_t *font, float *out_width, float *out_height, float *out_visual_min_y) {
     float pen_x = 0.0f;
-    float pen_y = 0.0f;
     float max_width = 0.0f;
     float visual_min_y = 1e6f;
     float visual_max_y = -1e6f;
-    float line_height = font->size;
 
     while (*text) {
         char c = *text++;
@@ -224,7 +222,6 @@ void ui_measure_text(const char *text, font_t *font, float *out_width, float *ou
                 max_width = pen_x;
 
             pen_x = 0.0f;
-            pen_y += line_height;
 
             continue;
         }
@@ -268,7 +265,7 @@ window_t *ui_create_window() {
     window_t *window = calloc(1, sizeof(window_t));
     window->widget_count = 0;
     window->has_focus = false;
-    window->rendered = false;
+    window->rendered = true;
     window->width = width;
     window->height = height;
     window->id = counter++;
@@ -290,7 +287,7 @@ window_t *ui_create_window() {
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 
     if (status != GL_FRAMEBUFFER_COMPLETE) {
-        printf("  EE: ui_create_window() -> window framebuffer incomplete (0x%x)\n", status);
+        printf("  EE: (flux_ui.c) ui_create_window() -> window framebuffer incomplete (0x%x)\n", status);
 
         exit(1);
     }
@@ -465,7 +462,7 @@ void ui_widget_set_color(widget_t *widg, const char *color) {
 
 void ui_widget_set_text(widget_t *widg, const char *text) {
     if (widg->type != WIDGET_NONE && widg->type != WIDGET_TEXT) {
-        printf("  WW: ui_widget_set_text() -> widget has a different content type, ignoring set_text\n    widget ID: %s\n", widg->id);
+        printf("  WW: (flux_ui.c) ui_widget_set_text() -> widget has a different content type, ignoring set_text\n    widget ID: %s\n", widg->id);
 
         return;
     }
@@ -475,7 +472,7 @@ void ui_widget_set_text(widget_t *widg, const char *text) {
 
 void ui_widget_set_image(widget_t *widg, GLuint texture) {
     if (widg->type != WIDGET_NONE && widg->type != WIDGET_IMAGE) {
-        printf("  WW: ui_widget_set_image() -> widget has a different content type, ignoring set_image\n    widget ID: %s\n", widg->id);
+        printf("  WW: (flux_ui.c) ui_widget_set_image() -> widget has a different content type, ignoring set_image\n    widget ID: %s\n", widg->id);
 
         return;
     }
@@ -493,13 +490,13 @@ font_t *ui_widget_get_font(widget_t *widg) {
 
 void ui_widget_append_child(widget_t *widg, widget_t *child) {
     if (!widg) {
-        printf("  EE: ui_widget_append_child() -> attempted to append to an invalid widget\n");
+        printf("  EE: (flux_ui.c) ui_widget_append_child() -> attempted to append to an invalid widget\n");
 
         exit(1);
     }
 
     if (!child) {
-        printf("  EE: ui_widget_append_child() -> attempted to append an invalid child\n");
+        printf("  EE: (flux_ui.c) ui_widget_append_child() -> attempted to append an invalid child\n");
 
         exit(1);
     }
@@ -507,7 +504,7 @@ void ui_widget_append_child(widget_t *widg, widget_t *child) {
     int count = widg->child_count;
 
     if (count >= MAX_CHILDREN) {
-        printf("  EE: ui_widget_append_child() -> allowed number of children exceeded\n");
+        printf("  EE: (flux_ui.c) ui_widget_append_child() -> allowed number of children exceeded\n");
 
         exit(1);
     }
@@ -533,13 +530,13 @@ void ui_widget_append_child(widget_t *widg, widget_t *child) {
 
 void ui_append_widget(window_t *window, widget_t *widget) {
     if (!window) {
-        printf("  EE: ui_append_widget() -> attempted to append to an invalid window\n");
+        printf("  EE: (flux_ui.c) ui_append_widget() -> attempted to append to an invalid window\n");
 
         exit(1);
     }
 
     if (!widget) {
-        printf("  EE: ui_append_widget() -> attempted to append an invalid widget\n");
+        printf("  EE: (flux_ui.c) ui_append_widget() -> attempted to append an invalid widget\n");
 
         exit(1);
     }
@@ -547,7 +544,7 @@ void ui_append_widget(window_t *window, widget_t *widget) {
     int count = window->widget_count;
 
     if (count >= MAX_WIDGETS) {
-        printf("  EE: ui_append_widget() -> allowed number of widgets exceeded\n");
+        printf("  EE: (flux_ui.c) ui_append_widget() -> allowed number of widgets exceeded\n");
 
         exit(1);
     }
@@ -576,13 +573,13 @@ void ui_append_widget(window_t *window, widget_t *widget) {
 
 void ui_remove_widget(window_t *window, widget_t *widget) {
     if (!window) {
-        printf("  EE: ui_remove_widget() -> attempted to remove from an invalid window\n");
+        printf("  EE: (flux_ui.c) ui_remove_widget() -> attempted to remove from an invalid window\n");
 
         exit(1);
     }
 
     if (!widget) {
-        printf("  EE: ui_remove_widget() -> attempted to remove an invalid widget\n");
+        printf("  EE: (flux_ui.c) ui_remove_widget() -> attempted to remove an invalid widget\n");
 
         exit(1);
     }

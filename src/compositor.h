@@ -47,6 +47,7 @@ typedef EGLSurface (*PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC)(
 
 #define SOCKET_PATH "/tmp/flux_comp.sock"
 #define MAX_WINDOWS 10
+#define MAX_CLIENTS 10
 
 extern int drm_fd;
 extern drmModeRes *resources;

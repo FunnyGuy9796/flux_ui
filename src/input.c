@@ -7,7 +7,7 @@ static int open_restricted(const char *path, int flags, void *user_data) {
     int fd = open(path, flags);
 
     if (fd < 0)
-        printf("  WW: open_restricted() -> failed to open %s\n", path);
+        printf("  WW: (input.c) open_restricted() -> failed to open %s\n", path);
 
     return fd < 0 ? -1 : fd;
 }
@@ -25,7 +25,7 @@ int input_init() {
     input_state.udev = udev_new();
 
     if (!input_state.udev) {
-        printf("  EE: input_init() -> failed to create udev context\n");
+        printf("  EE: (input.c) input_init() -> failed to create udev context\n");
 
         return 1;
     }
@@ -33,14 +33,14 @@ int input_init() {
     input_state.li = libinput_udev_create_context(&interface, NULL, input_state.udev);
 
     if (!input_state.li) {
-        printf("  EE: input_init() -> failed to create libinput context\n");
+        printf("  EE: (input.c) input_init() -> failed to create libinput context\n");
         udev_unref(input_state.udev);
 
         return 1;
     }
 
     if (libinput_udev_assign_seat(input_state.li, "seat0") != 0) {
-        printf("  EE: input_init() -> failed to assign seat\n");
+        printf("  EE: (input.c) input_init() -> failed to assign seat\n");
         libinput_unref(input_state.li);
         udev_unref(input_state.udev);
 
@@ -50,7 +50,7 @@ int input_init() {
     input_state.input_fd = libinput_get_fd(input_state.li);
 
     if (input_state.input_fd < 0) {
-        printf("  EE: input_init() -> failed to get libinput fd\n");
+        printf("  EE: (input.c) input_init() -> failed to get libinput fd\n");
         libinput_unref(input_state.li);
         udev_unref(input_state.udev);
 
@@ -64,7 +64,7 @@ int input_init() {
     input_state.mouse_x = mode->hdisplay / 2.0;
     input_state.mouse_y = mode->vdisplay / 2.0;
 
-    printf("  input system... [OK]\n");
+    printf("  II: (input.c) input_init() -> input system... [OK]\n");
 
     return 0;
 }
@@ -185,13 +185,13 @@ void input_process_event() {
             }
 
             case LIBINPUT_EVENT_DEVICE_ADDED: {
-                printf("  II: input_process_event() -> input device added\n");
+                printf("  II: (input.c) input_process_event() -> input device added\n");
 
                 break;
             }
 
             case LIBINPUT_EVENT_DEVICE_REMOVED: {
-                printf("  II: input_process_event() -> input device removed\n");
+                printf("  II: (input.c) input_process_event() -> input device removed\n");
 
                 break;
             }

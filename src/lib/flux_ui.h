@@ -11,16 +11,10 @@
 #include <time.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
+#include "flux_type.h"
 
 #define MAX_WIDGETS 256
 #define MAX_CHILDREN 32
-
-typedef enum {
-    WIDGET_NONE,
-    WIDGET_RECT,
-    WIDGET_TEXT,
-    WIDGET_IMAGE
-} widget_type_t;
 
 typedef struct Glyph {
     float u0, v0;
@@ -77,10 +71,10 @@ typedef struct Widget {
     int child_count;
     widget_parent_t parent;
 
-    widget_enter_fn mouse_enter;
-    widget_leave_fn mouse_leave;
-    widget_button_down_fn mouse_btn_down;
-    widget_button_up_fn mouse_btn_up;
+    widget_enter_fn on_mouse_enter;
+    widget_leave_fn on_mouse_leave;
+    widget_button_down_fn on_mouse_btn_down;
+    widget_button_up_fn on_mouse_btn_up;
 } widget_t;
 
 typedef struct Window {
