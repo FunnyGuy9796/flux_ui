@@ -6,14 +6,14 @@
 
 static unsigned int counter = 0;
 
-GLuint ui_load_texture(const char *filename) {
+int ui_load_texture(window_t *window, const char *filename) {
     int width, height, channels;
     unsigned char *data = stbi_load(filename, &width, &height, &channels, 4);
 
     if (!data) {
         printf("  EE: (flux_ui.c) load_texture() -> failed to load image: %s\n", filename);
 
-        return 0;
+        return -1;
     }
 
     GLuint tex;
@@ -31,40 +31,121 @@ GLuint ui_load_texture(const char *filename) {
 
     stbi_image_free(data);
 
-    return tex;
+    for (int i = 0; i < MAX_WIDGETS; i++) {
+        GLuint curr_tex = window->textures[i];
+
+        if (curr_tex == -1) {
+            window->textures[i] = tex;
+            
+            return i;
+        }
+    }
+
+    printf("  EE: (flux_ui.c) ui_load_texture() -> maximum number of textures reached\n");
+
+    glDeleteTextures(1, &tex);
+
+    return -1;
 }
 
-font_t *ui_load_font(const char *ttf_path, float pixel_height) {
-    font_t *font = malloc(sizeof(font_t));
-    unsigned char *ttf_buffer;
-    size_t size;
+void ui_destroy_texture(window_t *window, int texture) {
+    if (texture != -1) {
+        GLuint tex = window->textures[texture];
 
+        window->textures[texture] = -1;
+
+        glDeleteTextures(1, &tex);
+    }
+}
+
+int ui_load_font(window_t *window, const char *ttf_path, float pixel_height) {
     FILE *f = fopen(ttf_path, "rb");
 
+    if (!f) {
+        printf("  EE: (flux_ui.c) ui_load_font() -> failed to open '%s': %s\n", ttf_path, strerror(errno));
+
+        return -1;
+    }
+
     fseek(f, 0, SEEK_END);
-    size = ftell(f);
+
+    size_t size = ftell(f);
+
     rewind(f);
 
-    ttf_buffer = malloc(size);
-    fread(ttf_buffer, 1, size, f);
+    unsigned char *ttf_buffer = malloc(size);
+
+    if (!ttf_buffer) {
+        printf("  EE: (flux_ui.c) ui_load_font() -> malloc failed for ttf_buffer\n");
+        fclose(f);
+        return -1;
+    }
+
+    size_t bytes_read = fread(ttf_buffer, 1, size, f);
+
     fclose(f);
+
+    if (bytes_read != size) {
+        printf("  EE: (flux_ui.c) ui_load_font() -> failed to read complete font file\n");
+
+        free(ttf_buffer);
+
+        return -1;
+    }
+
+    font_t *font = malloc(sizeof(font_t));
+
+    if (!font) {
+        printf("  EE: (flux_ui.c) ui_load_font() -> malloc failed for font\n");
+
+        free(ttf_buffer);
+
+        return -1;
+    }
+
+    memset(font, 0, sizeof(font_t));
 
     const int ATLAS_W = 512;
     const int ATLAS_H = 512;
     unsigned char *bitmap = calloc(ATLAS_W * ATLAS_H, 1);
 
+    if (!bitmap) {
+        printf("  EE: (flux_ui.c) ui_load_font() -> calloc failed for bitmap\n");
+
+        free(font);
+        free(ttf_buffer);
+
+        return -1;
+    }
+
     stbtt_fontinfo info;
 
-    stbtt_InitFont(&info, ttf_buffer, 0);
+    if (!stbtt_InitFont(&info, ttf_buffer, 0)) {
+        printf("  EE: (flux_ui.c) ui_load_font() -> stbtt_InitFont failed\n");
 
-    stbtt_bakedchar baked[128];
+        free(bitmap);
+        free(font);
+        free(ttf_buffer);
 
-    stbtt_BakeFontBitmap(ttf_buffer, 0, pixel_height, bitmap, ATLAS_W, ATLAS_H, 32, 96, baked);
+        return -1;
+    }
+
+    stbtt_bakedchar baked[96];
+    int result = stbtt_BakeFontBitmap(ttf_buffer, 0, pixel_height, bitmap, ATLAS_W, ATLAS_H, 32, 96, baked);
+
+    if (result <= 0) {
+        printf("  EE: (flux_ui.c) ui_load_font() -> stbtt_BakeFontBitmap failed (returned %d)\n", result);
+
+        free(bitmap);
+        free(font);
+        free(ttf_buffer);
+
+        return -1;
+    }
 
     glGenTextures(1, &font->texture);
     glBindTexture(GL_TEXTURE_2D, font->texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, ATLAS_W, ATLAS_H, 0, GL_ALPHA, GL_UNSIGNED_BYTE, bitmap);
-
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
@@ -76,7 +157,6 @@ font_t *ui_load_font(const char *ttf_path, float pixel_height) {
         g->v0 = b->y0 / (float)ATLAS_H;
         g->u1 = b->x1 / (float)ATLAS_W;
         g->v1 = b->y1 / (float)ATLAS_H;
-
         g->w = b->x1 - b->x0;
         g->h = b->y1 - b->y0;
         g->xoff = b->xoff;
@@ -89,7 +169,31 @@ font_t *ui_load_font(const char *ttf_path, float pixel_height) {
 
     font->size = pixel_height;
 
-    return font;
+    for (int i = 0; i < MAX_WIDGETS; i++) {
+        if (!window->fonts[i]) {
+            window->fonts[i] = font;
+
+            return i;
+        }
+    }
+
+    printf("  EE: (flux_ui.c) ui_load_font() -> maximum number of fonts reached\n");
+
+    glDeleteTextures(1, &font->texture);
+    free(font);
+    
+    return -1;
+}
+
+void ui_destroy_font(window_t *window, int font) {
+    if (font != -1) {
+        font_t *font_obj = window->fonts[font];
+
+        window->fonts[font] = NULL;
+
+        glDeleteTextures(1, &font_obj->texture);
+        free(font_obj);
+    }
 }
 
 void ui_draw_rect(float x, float y, float w, float h, float r, float red, float green, float blue, float alpha) {
@@ -208,11 +312,13 @@ void ui_draw_text(float x, float y, font_t *font, const char *text, float r, flo
     }
 }
 
-void ui_measure_text(const char *text, font_t *font, float *out_width, float *out_height, float *out_visual_min_y) {
+void ui_measure_text(window_t *window, const char *text, int font, float *out_width, float *out_height, float *out_visual_min_y) {
     float pen_x = 0.0f;
     float max_width = 0.0f;
     float visual_min_y = 1e6f;
     float visual_max_y = -1e6f;
+
+    font_t *real_font = window->fonts[font];
 
     while (*text) {
         char c = *text++;
@@ -229,7 +335,7 @@ void ui_measure_text(const char *text, font_t *font, float *out_width, float *ou
         if (c < 32 || c >= 128)
             continue;
 
-        glyph_t *g = &font->glyphs[(int)c];
+        glyph_t *g = &real_font->glyphs[(int)c];
 
         pen_x += g->xadvance;
 
@@ -269,6 +375,8 @@ window_t *ui_create_window() {
     window->width = width;
     window->height = height;
     window->id = counter++;
+
+    memset(window->textures, -1, sizeof(window->textures));
 
     glGenTextures(1, &window->color_tex);
     glBindTexture(GL_TEXTURE_2D, window->color_tex);
@@ -428,9 +536,29 @@ widget_t *ui_create_widget(const char id[64], widget_type_t type) {
     return widg;
 }
 
+window_t *ui_widget_get_window(widget_t *widget) {
+    widget_t *curr_widg = widget;
+
+    while (curr_widg->parent.type == PARENT_WIDGET)
+        curr_widg = curr_widg->parent.widget;
+
+    if (curr_widg->parent.type == PARENT_WINDOW)
+        return curr_widg->parent.window;
+
+    printf("  EE: (flux_ui.c) ui_widget_get_window() -> unable to get window for widget\n");
+
+    return NULL;
+}
+
 void ui_destroy_widget(widget_t *widget) {
     if (!widget)
         return;
+
+    if (widget->texture) {
+        window_t *widg_win = ui_widget_get_window(widget);
+
+        ui_destroy_texture(widg_win, widget->texture);
+    }
 
     for (int i = 0; i < widget->child_count; i++)
         ui_destroy_widget(widget->children[i]);
@@ -470,18 +598,42 @@ void ui_widget_set_text(widget_t *widg, const char *text) {
     strcpy(widg->text, text);
 }
 
-void ui_widget_set_image(widget_t *widg, GLuint texture) {
+void ui_widget_set_image(widget_t *widg, int texture) {
     if (widg->type != WIDGET_NONE && widg->type != WIDGET_IMAGE) {
         printf("  WW: (flux_ui.c) ui_widget_set_image() -> widget has a different content type, ignoring set_image\n    widget ID: %s\n", widg->id);
 
         return;
     }
 
-    widg->texture = texture;
+    if (texture < 0 || texture >= MAX_WIDGETS) {
+        printf("  EE: (flux_ui.c) ui_widget_set_image() -> invalid texture index\n");
+
+        return;
+    }
+
+    window_t *widg_win = ui_widget_get_window(widg);
+
+    GLuint tex = widg_win->textures[texture];
+
+    if (tex == -1) {
+        printf("  WW: (flux_ui.c) ui_widget_set_image() -> invalid texture");
+
+        return;
+    }
+
+    widg->texture = tex;
 }
 
-void ui_widget_set_font(widget_t *widg, font_t *font) {
-    widg->font = font;
+void ui_widget_set_font(widget_t *widg, window_t *window, int font) {
+    if (widg->type != WIDGET_NONE && widg->type != WIDGET_TEXT) {
+        printf("  WW: (flux_ui.c) ui_widget_set_font() -> widget has a different content type, ignoring set_font\n    widget ID: %s\n", widg->id);
+
+        return;
+    }
+
+    font_t *widg_font = window->fonts[font];
+
+    widg->font = widg_font;
 }
 
 font_t *ui_widget_get_font(widget_t *widg) {

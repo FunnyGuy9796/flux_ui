@@ -89,6 +89,9 @@ typedef struct Window {
     GLuint depth_rbo;
     int width, height;
 
+    font_t *fonts[MAX_WIDGETS];
+    GLuint textures[MAX_WIDGETS];
+
     window_render_loop_fn render_loop;
     window_exit_fn on_exit;
 } window_t;
@@ -108,13 +111,15 @@ inline void ui_hex_to_rgba(const char *hex, float *r, float *g, float *b, float 
     *b = blue / 255.0f;
 }
 
-GLuint ui_load_texture(const char *filename);
-font_t *ui_load_font(const char *ttf_path, float pixel_height);
+int ui_load_texture(window_t *window, const char *filename);
+void ui_destroy_texture(window_t *window, int texture);
+int ui_load_font(window_t *window, const char *ttf_path, float pixel_height);
+void ui_destroy_font(window_t *window, int font);
 
 void ui_draw_rect(float x, float y, float w, float h, float r, float red, float green, float blue, float alpha);
 void ui_draw_rect_texture(float x, float y, float w, float h, float r, float red, float green, float blue, float alpha, GLuint texture);
 void ui_draw_text(float x, float y, font_t *font, const char *text, float r, float g, float b, float a);
-void ui_measure_text(const char *text, font_t *font, float *out_width, float *out_height, float *out_visual_min_y);
+void ui_measure_text(window_t *window, const char *text, int font, float *out_width, float *out_height, float *out_visual_min_y);
 
 window_t *ui_create_window();
 void ui_render_window(window_t *window);
@@ -130,8 +135,8 @@ void ui_destroy_widget(widget_t *widget);
 void ui_widget_set_geometry(widget_t *widg, float x, float y, float w, float h, float radius);
 void ui_widget_set_color(widget_t *widg, const char *color);
 void ui_widget_set_text(widget_t *widg, const char *text);
-void ui_widget_set_image(widget_t *widg, GLuint texture);
-void ui_widget_set_font(widget_t *widg, font_t *font);
+void ui_widget_set_image(widget_t *widg, int texture);
+void ui_widget_set_font(widget_t *widg, window_t *window, int font);
 font_t *ui_widget_get_font(widget_t *widg);
 void ui_widget_append_child(widget_t *widg, widget_t *child);
 void ui_append_widget(window_t *window, widget_t *widget);

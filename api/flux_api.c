@@ -24,6 +24,9 @@ static int send_request(WindowRequest *req, void *response, size_t response_size
             printf("  EE: (flux_api.c) send_request() -> failed to receive response\n");
             return 1;
         }
+
+        if (received < response_size)
+            ((char *)response)[received] = '\0';
     }
 
     return 0;
@@ -60,12 +63,24 @@ int flux_init() {
     return 0;
 }
 
-void flux_shutdown() {
-    if (flux_sock_fd != -1) {
-        close(flux_sock_fd);
+void flux_shutdown(unsigned long win_id) {
+    WindowRequest req;
+    
+    memset(&req, 0, sizeof(req));
 
-        flux_sock_fd = -1;
+    req.id = win_id;
+
+    strncpy(req.request, "SHUTDOWN", sizeof(req.request) - 1);
+
+    if (send_request(&req, NULL, 0) < 0) {
+        printf("  EE: (flux_api.c) flux_shutdown() -> failed to close connection to compositor\n");
+
+        return;
     }
+
+    close(flux_sock_fd);
+
+    flux_sock_fd = -1;
 }
 
 unsigned long flux_create_window() {
@@ -83,8 +98,6 @@ unsigned long flux_create_window() {
 
         return 0;
     }
-
-    printf("  II: (flux_api.c) flux_create_window() -> win_id: %lu\n", win_id);
 
     return win_id;
 }
@@ -105,8 +118,6 @@ int flux_show_window(unsigned long win_id) {
         return 1;
     }
 
-    printf("  II: (flux_api.c) flux_show_window() -> response: %s\n", response);
-
     return 0;
 }
 
@@ -125,8 +136,6 @@ int flux_hide_window(unsigned long win_id) {
 
         return 1;
     }
-
-    printf("  II: (flux_api.c) flux_hide_window() -> response: %s\n", response);
 
     return 0;
 }
@@ -147,29 +156,6 @@ int flux_render_window(unsigned long win_id) {
         return 1;
     }
 
-    printf("  II: (flux_api.c) flux_render_window() -> response: %s\n", response);
-
-    return 0;
-}
-
-int flux_destroy_window(unsigned long win_id) {
-    WindowRequest req;
-    char response[32];
-
-    memset(&req, 0, sizeof(req));
-
-    req.id = win_id;
-
-    strncpy(req.request, "DESTROY", sizeof(req.request) - 1);
-
-    if (send_request(&req, response, sizeof(response)) < 0) {
-        printf("  EE: (flux_api.c) flux_destroy_window() -> failed to destroy window %lu\n", win_id);
-
-        return 1;
-    }
-
-    printf("  II: (flux_api.c) flux_destroy_window() -> response: %s\n", response);
-
     return 0;
 }
 
@@ -188,8 +174,6 @@ int flux_add_widget(unsigned long win_id, const char *widget_id, widget_type_t t
 
         return 1;
     }
-
-    printf("  II: (flux_api.c) flux_add_widget() -> response: %s\n", response);
 
     return 0;
 }
@@ -210,8 +194,6 @@ int flux_set_widget_geometry(unsigned long win_id, const char *widget_id, float 
         return 1;
     }
 
-    printf("  II: (flux_api.c) flux_set_widget_geometry() -> response: %s\n", response);
-
     return 0;
 }
 
@@ -230,8 +212,6 @@ int flux_set_widget_color(unsigned long win_id, const char *widget_id, const cha
 
         return 1;
     }
-
-    printf("  II: (flux_api.c) flux_set_widget_color() -> response: %s\n", response);
 
     return 0;
 }
@@ -252,8 +232,6 @@ int flux_set_widget_text(unsigned long win_id, const char *widget_id, const char
         return 1;
     }
 
-    printf("  II: (flux_api.c) flux_set_widget_text() -> response: %s\n", response);
-
     return 0;
 }
 
@@ -272,8 +250,6 @@ int flux_set_widget_image(unsigned long win_id, const char *widget_id, const cha
 
         return 1;
     }
-
-    printf("  II: (flux_api.c) flux_set_widget_image() -> response: %s\n", response);
 
     return 0;
 }
@@ -294,8 +270,6 @@ int flux_set_widget_font(unsigned long win_id, const char *widget_id, const char
         return 1;
     }
 
-    printf("  II: (flux_api.c) flux_set_widget_font() -> response: %s\n", response);
-
     return 0;
 }
 
@@ -315,7 +289,33 @@ int flux_remove_widget(unsigned long win_id, const char *widget_id) {
         return 1;
     }
 
-    printf("  II: (flux_api.c) flux_remove_widget() -> response: %s\n", response);
+    return 0;
+}
+
+int flux_get_screen_size(unsigned long win_id, int *width, int *height) {
+    WindowRequest req;
+    struct {
+        int w;
+        int h;
+    } response;
+
+    memset(&req, 0, sizeof(req));
+
+    req.id = win_id;
+
+    snprintf(req.request, sizeof(req.request), "GET_SCREEN_SIZE");
+    
+    if (send_request(&req, &response, sizeof(response)) < 0) {
+        printf("  EE: (flux_api.c) flux_get_screen_size() -> failed to get screen size\n");
+
+        *width = -1;
+        *height = -1;
+
+        return 1;
+    }
+
+    *width = response.w;
+    *height = response.h;
 
     return 0;
 }

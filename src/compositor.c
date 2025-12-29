@@ -1,4 +1,5 @@
 #include "compositor.h"
+#include "GLES2/gl2.h"
 #include "lib/flux_ui.h"
 #include "sys_ui.h"
 #include "input.h"
@@ -1050,14 +1051,14 @@ void comp_remove_window(window_t *window) {
     printf("  WW: (compositor.c) comp_remove_window() -> window %lu not found\n", id);
 }
 
-void comp_handle_widget_command(window_t *window, const char *command) {
+int comp_handle_widget_command(window_t *window, const char *command) {
     char widget_id[64];
     float x, y, w, h;
     int radius;
     char color[32];
     char text[256];
-    char font_file[64];
-    int font_size;
+    int font_index;
+    int image_index;
     widget_type_t widg_type;
 
     if (sscanf(command, "CREATE_WIDGET:%63[^:]:%u", widget_id, &widg_type) == 2) {
@@ -1070,7 +1071,7 @@ void comp_handle_widget_command(window_t *window, const char *command) {
         if (!widget) {
             printf("  WW: (compositor.c) comp_handle_widget_command() -> SET_WIDGET_GEOMETRY on invalid widget\n");
 
-            return;
+            return 1;
         }
 
         ui_widget_set_geometry(widget, x, y, w, h, radius);
@@ -1080,7 +1081,7 @@ void comp_handle_widget_command(window_t *window, const char *command) {
         if (!widget) {
             printf("  WW: (compositor.c) comp_handle_widget_command() -> SET_WIDGET_COLOR on invalid widget\n");
 
-            return;
+            return 1;
         }
 
         ui_widget_set_color(widget, color);
@@ -1090,33 +1091,43 @@ void comp_handle_widget_command(window_t *window, const char *command) {
         if (!widget) {
             printf("  WW: (compositor.c) comp_handle_widget_command() -> SET_WIDGET_TEXT on invalid widget\n");
 
-            return;
+            return 1;
         }
 
         ui_widget_set_text(widget, text);
-    } else if (sscanf(command, "SET_WIDGET_FONT:%63[^:]:%63s:%d", widget_id, font_file, &font_size) == 3) {
+    } else if (sscanf(command, "SET_WIDGET_IMAGE:%63[^:]:%d", widget_id, &image_index) == 2) {
+        widget_t *widget = ui_window_get_widget(window, widget_id);
+
+        if (!widget) {
+            printf("  WW: (compositor.c) comp_handle_widget_command() -> SET_WIDGET_IMAGE on invalid widget\n");
+
+            return 1;
+        }
+
+        ui_widget_set_image(widget, image_index);
+    } else if (sscanf(command, "SET_WIDGET_FONT:%63[^:]:%d", widget_id, &font_index) == 2) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
         if (!widget) {
             printf("  WW: (compositor.c) comp_handle_widget_command() -> LOAD_WIDGET_FONT on invalid widget\n");
 
-            return;
+            return 1;
         }
 
-        font_t *font = ui_load_font(font_file, font_size);
-
-        ui_widget_set_font(widget, font);
-    } else if (sscanf(command, "REMOVE_WIDGET:%63s", widget_id) == 1) {
+        ui_widget_set_font(widget, window, font_index);
+    } else if (sscanf(command, "REMOVE_WIDGET:%63[^:]", widget_id) == 1) {
         widget_t *widget = ui_window_get_widget(window, widget_id);
 
         if (!widget) {
             printf("  WW: (compositor.c) comp_handle_widget_command() -> REMOVE_WIDGET on invalid widget\n");
 
-            return;
+            return 1;
         }
 
         ui_remove_widget(window, widget);
     }
+
+    return 0;
 }
 
 window_t *comp_get_window(unsigned long id) {
@@ -1159,6 +1170,10 @@ void comp_listen_socket() {
                 send(active_clients[i], &id, sizeof(id), 0);
             } else {
                 window_t *window = comp_get_window(request.id);
+                char font_file[128];
+                int font_size = 0;
+                char image_file[128];
+                int widget_status = -1;
 
                 if (window) {
                     if (strcmp(request.request, "RENDER") == 0)
@@ -1167,30 +1182,70 @@ void comp_listen_socket() {
                         ui_request_render(window);
                     else if (strcmp(request.request, "HIDE") == 0)
                         ui_request_hide(window);
-                    else if (strcmp(request.request, "DESTROY") == 0) {
+                    else if (strcmp(request.request, "GET_SCREEN_SIZE") == 0) {
+                        struct {
+                            int w;
+                            int h;
+                        } response;
+
+                        response.w = mode->hdisplay;
+                        response.h = mode->vdisplay;
+
+                        send(active_clients[i], &response, sizeof(response), 0);
+
+                        return;
+                    } else if (strncmp(request.request, "LOAD_FONT:", 10) == 0) {
+                        if (sscanf("LOAD_FONT:%63[^:]:%d", font_file, font_size) == 2) {
+                            int font = ui_load_font(window, font_file, font_size);
+
+                            send(active_clients[i], &font, sizeof(font), 0);
+
+                            return;
+                        }
+                    } else if (strncmp(request.request, "LOAD_TEXTURE:", 13) == 0) {
+                        if (sscanf("LOAD_TEXTURE:%63[^:]", image_file) == 1) {
+                            int image = ui_load_texture(window, image_file);
+
+                            send(active_clients[i], &image, sizeof(image), 0);
+
+                            return;
+                        }
+                    } else if (strncmp(request.request, "CREATE_WIDGET:", 14) == 0)
+                        widget_status = comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_GEOMETRY:", 20) == 0)
+                        widget_status = comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_COLOR:", 17) == 0)
+                        widget_status = comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_TEXT:", 16) == 0)
+                        widget_status = comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_IMAGE:", 17) == 0)
+                        widget_status = comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SET_WIDGET_FONT:", 16) == 0)
+                        widget_status = comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "REMOVE_WIDGET:", 14) == 0)
+                        widget_status = comp_handle_widget_command(window, request.request);
+                    else if (strncmp(request.request, "SHUTDOWN", 9) == 0) {
                         comp_remove_window(window);
+                        close(active_clients[i]);
+
+                        active_clients[i] = active_clients[--client_count];
+                        i--;
 
                         requested_window = window_registry[registry_count].window;
-                    } else if (strncmp(request.request, "CREATE_WIDGET:", 14) == 0)
-                        comp_handle_widget_command(window, request.request);
-                    else if (strncmp(request.request, "SET_WIDGET_GEOMETRY:", 20) == 0)
-                        comp_handle_widget_command(window, request.request);
-                    else if (strncmp(request.request, "SET_WIDGET_COLOR:", 17) == 0)
-                        comp_handle_widget_command(window, request.request);
-                    else if (strncmp(request.request, "SET_WIDGET_TEXT:", 16) == 0)
-                        comp_handle_widget_command(window, request.request);
-                    else if (strncmp(request.request, "LOAD_WIDGET_FONT:", 17) == 0)
-                        comp_handle_widget_command(window, request.request);
-                    else if (strncmp(request.request, "REMOVE_WIDGET:", 14) == 0)
-                        comp_handle_widget_command(window, request.request);
-                    else {
+                    } else {
                         printf("  EE: (compositor.c) comp_listen_socket() -> invalid command from window ID %lu\n", request.id);
 
                         const char *err = "ERROR: invalid command";
 
                         send(active_clients[i], err, strlen(err), 0);
 
-                        continue;
+                        return;
+                    }
+
+                    if (widget_status == 1) {
+                        const char *err = "ERROR: widget command failed";
+
+                        send(active_clients[i], err, strlen(err), 0);
                     }
 
                     send(active_clients[i], "OK", 2, 0);
@@ -1296,12 +1351,12 @@ int main() {
     mouse_win = ui_create_window();
     mouse_cursor = ui_create_widget("sys-cursor", WIDGET_IMAGE);
 
-    GLuint cursor_image = ui_load_texture("assets/cursors/default.png");
+    int cursor_image = ui_load_texture(mouse_win, "assets/cursors/default.png");
 
     ui_widget_set_geometry(mouse_cursor, mode->hdisplay / 2.0, mode->vdisplay / 2.0, 24, 24, -1);
     ui_widget_set_color(mouse_cursor, "#ffffffff");
-    ui_widget_set_image(mouse_cursor, cursor_image);
     ui_append_widget(mouse_win, mouse_cursor);
+    ui_widget_set_image(mouse_cursor, cursor_image);
     ui_request_render(mouse_win);
 
     struct timespec last_time;
@@ -1365,6 +1420,11 @@ int main() {
                 requested_window = NULL;
                 focused_window = sys_ui_win;
             }
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, mode->hdisplay, mode->vdisplay);
+            glClearColor(0, 0, 0, 0);
+            glClear(GL_COLOR_BUFFER_BIT);
 
             if (requested_window)
                 comp_redraw(requested_window, dt);
